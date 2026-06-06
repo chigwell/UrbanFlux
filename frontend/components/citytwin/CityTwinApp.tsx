@@ -15,6 +15,7 @@ import type {
   CityTwinSettingKey,
   CityTwinSettings,
 } from "@/lib/cityTwinMap";
+import { BottomSheet } from "./BottomSheet";
 import { ControlsCard } from "./ControlsCard";
 import { DashboardCard } from "./DashboardCard";
 import { IntroCard } from "./IntroCard";
@@ -109,36 +110,45 @@ export function CityTwinApp() {
     handleRef.current?.setTheme(dark ? "dark" : "light");
   };
 
+  const homeButton = (
+    <div className="flex w-fit items-center justify-between gap-2 border-[0.5px] bg-card px-3 py-2 shadow-sm">
+      <Button asChild size="sm" variant="ghost">
+        <Link href="/" className="hover:bg-transparent">
+          <ArrowLeftIcon data-icon="inline-start" />
+          Home
+        </Link>
+      </Button>
+    </div>
+  );
+
+  const controlsCard = (
+    <ControlsCard
+      settings={settings}
+      allowWater={allowWater}
+      isDark={isDark}
+      onSetting={handleSetting}
+      onAllowWater={handleAllowWater}
+      onToggleTheme={handleToggleTheme}
+      onDemo={() => handleRef.current?.loadDemo()}
+      onUndo={() => handleRef.current?.undo()}
+      onClear={() => handleRef.current?.clearZone()}
+      onFit={() => handleRef.current?.fit()}
+    />
+  );
+
   return (
     <div className="relative h-dvh w-full overflow-hidden bg-background">
       <div id="map" />
 
-      <div className="absolute left-4 top-4 z-10 flex w-[min(21rem,calc(100vw-2rem))] flex-col gap-2.5">
-        <div className="flex w-fit items-center justify-between gap-2  border-[0.5px] bg-card px-3 py-2 shadow-sm">
-          <Button asChild size="sm" variant="ghost">
-            <Link href="/" className="hover:bg-transparent">
-              <ArrowLeftIcon data-icon="inline-start" />
-              Home
-            </Link>
-          </Button>
-        </div>
+      {/* Desktop: two floating columns. Hidden on mobile in favour of the sheet. */}
+      <div className="absolute left-4 top-4 z-10 hidden w-[min(21rem,calc(100vw-2rem))] flex-col gap-2.5 md:flex">
+        {homeButton}
         <IntroCard />
         <StatusCard progress={progress} status={status} pills={pills} />
       </div>
 
-      <div className="absolute right-4 top-4 z-10 flex max-h-[calc(100dvh-2rem)] w-[min(22rem,calc(100vw-2rem))] flex-col gap-2.5 overflow-y-auto pb-2 *:shrink-0">
-        <ControlsCard
-          settings={settings}
-          allowWater={allowWater}
-          isDark={isDark}
-          onSetting={handleSetting}
-          onAllowWater={handleAllowWater}
-          onToggleTheme={handleToggleTheme}
-          onDemo={() => handleRef.current?.loadDemo()}
-          onUndo={() => handleRef.current?.undo()}
-          onClear={() => handleRef.current?.clearZone()}
-          onFit={() => handleRef.current?.fit()}
-        />
+      <div className="absolute right-4 top-4 z-10 hidden max-h-[calc(100dvh-2rem)] w-[min(22rem,calc(100vw-2rem))] flex-col gap-2.5 overflow-y-auto pb-2 *:shrink-0 md:flex">
+        {controlsCard}
         <LegendCard />
         <PopulationCard population={population} />
         <DashboardCard
@@ -149,11 +159,41 @@ export function CityTwinApp() {
         />
       </div>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-5 z-10 flex justify-center px-4">
+      <div className="pointer-events-none absolute inset-x-0 bottom-5 z-10 hidden justify-center px-4 md:flex">
         <p className="pointer-events-auto max-w-xl border-[0.5px] bg-card px-4 py-2 text-center text-xs text-muted-foreground">
           {hint}
         </p>
       </div>
+
+      {/* Mobile: a floating Home button + a single draggable bottom sheet. */}
+      <div className="absolute left-3 top-3 z-30 md:hidden">{homeButton}</div>
+
+      <BottomSheet
+        peek={
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium">Controls &amp; insights</span>
+            <span className="truncate text-xs text-muted-foreground">
+              {population?.status === "ready"
+                ? `${population.population} people`
+                : scenario}
+            </span>
+          </div>
+        }
+      >
+        <div className="flex flex-col gap-2.5 py-1 *:shrink-0">
+          {controlsCard}
+          <PopulationCard population={population} />
+          <DashboardCard
+            scenario={scenario}
+            metrics={metrics}
+            impact={impact}
+            report={report}
+          />
+          <StatusCard progress={progress} status={status} pills={pills} />
+          <LegendCard />
+          <IntroCard />
+        </div>
+      </BottomSheet>
     </div>
   );
 }
