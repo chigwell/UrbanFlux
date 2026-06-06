@@ -13,6 +13,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import main  # noqa: E402
+import nemotron_adapter  # noqa: E402
 from utils import _format_latest_theme_row  # noqa: E402
 
 
@@ -345,11 +346,45 @@ def test_fetch_borough_context_handles_missing_borough(monkeypatch) -> None:
 
 def test_call_nemotron_returns_none_without_fal_key(monkeypatch) -> None:
     monkeypatch.delenv("FAL_KEY", raising=False)
+    monkeypatch.setattr(nemotron_adapter, "_ENV_FILE", Path("/tmp/urbanflux-missing.env"))
 
     metrics, reason = main._call_nemotron("prompt")
 
     assert metrics is None
     assert reason == "fal_key_missing"
+
+
+def test_call_nemotron_reads_fal_key_from_env_file(monkeypatch, tmp_path) -> None:
+    source = "https://data.london.gov.uk/dataset/example/"
+    env_file = tmp_path / ".env"
+    env_file.write_text("FAL_KEY=file-key\n", encoding="utf-8")
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    monkeypatch.setattr(nemotron_adapter, "_ENV_FILE", env_file)
+    monkeypatch.setitem(
+        sys.modules,
+        "fal_client",
+        types.SimpleNamespace(
+            subscribe=lambda *args, **kwargs: {
+                "output": json.dumps(
+                    [
+                        {
+                            "improved_metric": "Housing capacity",
+                            "improved_value": "+1%",
+                            "delta": "+1% vs baseline",
+                            "source": source,
+                            "methodology_source": "",
+                            "basis": "Mapped data",
+                        }
+                    ]
+                )
+            }
+        ),
+    )
+
+    metrics, reason = main._call_nemotron("prompt")
+
+    assert metrics is not None
+    assert reason == "nemotron_refinement_succeeded"
 
 
 def test_call_nemotron_parses_valid_json(monkeypatch) -> None:
