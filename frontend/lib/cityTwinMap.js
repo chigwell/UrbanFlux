@@ -364,6 +364,8 @@ function initialiseMapLayers() {
         8, p.buildingLow,
         55, p.buildingMid,
         130, p.buildingHigh,
+        260, p.buildingTower,
+        420, p.buildingSupertall,
       ],
       "fill-extrusion-height": ["get", "height"],
       "fill-extrusion-base": 0,
@@ -467,6 +469,8 @@ function palette() {
       buildingLow: "#67e8f9",
       buildingMid: "#60a5fa",
       buildingHigh: "#a855f7",
+      buildingTower: "#f472b6",
+      buildingSupertall: "#facc15",
       generatedRoadCasing: "#ffffff",
       generatedGateway: "#06b6d4",
       generatedConnector: "#0891b2",
@@ -495,6 +499,8 @@ function palette() {
     buildingLow: "#53f7ff",
     buildingMid: "#7aa7ff",
     buildingHigh: "#b66dff",
+    buildingTower: "#ff7ab6",
+    buildingSupertall: "#fff08a",
     generatedRoadCasing: "#020617",
     generatedGateway: "#ffffff",
     generatedConnector: "#9dfcff",
@@ -2709,6 +2715,8 @@ function generateZoning({ localPolygon, frame, localBbox, obstacles, random, set
   const green = settings.green / 100;
   const parking = settings.parking / 100;
   const heightAmbition = settings.height / 100;
+  const towerIntensity = clamp((heightAmbition - 0.78) / 0.22, 0, 1);
+  const skyscraperIntensity = clamp((heightAmbition - 0.9) / 0.1, 0, 1);
   const baseCell = clamp(Math.sqrt(Math.max(120, medianBuildingArea)) * (2.4 - density * 0.6), 34, 84);
   const stepX = clamp(baseCell * 2.15, 56, 140);
   const stepY = clamp(baseCell * 1.85, 52, 132);
@@ -2752,25 +2760,41 @@ function generateZoning({ localPolygon, frame, localBbox, obstacles, random, set
         continue;
       }
 
-      const lots = random() > 0.72 && density > 0.42 ? 2 : 1;
+      const lots = (random() > 0.72 && density > 0.42) || (skyscraperIntensity > 0 && random() < skyscraperIntensity * 0.34) ? 2 : 1;
       for (let lot = 0; lot < lots; lot += 1) {
         const offset = lots === 1 ? 0 : (lot - 0.5) * stepX * 0.34;
         const center = { x: jittered.x + offset, y: jittered.y + randomRange(random, -8, 8) };
         if (!pointAllowedInside(center, localPolygon, obstacles)) {
           continue;
         }
-        const width = randomRange(random, baseCell * 0.72, baseCell * (1.35 + density * 0.35));
-        const depth = randomRange(random, baseCell * 0.7, baseCell * (1.26 + density * 0.25));
+        const isSkyscraper = skyscraperIntensity > 0 && random() < 0.76 * skyscraperIntensity;
+        const isLandmarkTower = isSkyscraper && skyscraperIntensity > 0.86 && random() < 0.16;
+        const width = isSkyscraper
+          ? randomRange(random, baseCell * 0.42, baseCell * (0.78 + density * 0.18))
+          : randomRange(random, baseCell * 0.72, baseCell * (1.35 + density * 0.35));
+        const depth = isSkyscraper
+          ? randomRange(random, baseCell * 0.44, baseCell * (0.82 + density * 0.18))
+          : randomRange(random, baseCell * 0.7, baseCell * (1.26 + density * 0.25));
         const poly = rectangleAround(center, width, depth, randomRange(random, -0.22, 0.22));
         if (!polygonAllowed(poly, localPolygon, obstacles)) {
           continue;
         }
         const footprintArea = Math.abs(polygonSignedArea(poly));
-        const levels = Math.round(clamp(2 + density * 7 + heightAmbition * 14 + randomRange(random, -2, 4), 2, 28));
-        const height = levels * 3.25;
+        const levels = isLandmarkTower
+          ? Math.round(randomRange(random, 86, 124))
+          : isSkyscraper
+            ? Math.round(clamp(34 + density * 16 + skyscraperIntensity * 44 + randomRange(random, -8, 18), 30, 96))
+            : Math.round(clamp(2 + density * 7 + heightAmbition * 14 + towerIntensity * 12 + randomRange(random, -2, 4), 2, 40));
+        const height = levels * (isSkyscraper ? 3.45 : 3.25);
         buildingCount += 1;
         buildingArea += footprintArea * levels;
-        features.push(localPolygonFeature(poly, frame, { kind: "building", height, levels, footprintArea }));
+        features.push(localPolygonFeature(poly, frame, {
+          kind: "building",
+          height,
+          levels,
+          footprintArea,
+          role: isLandmarkTower ? "landmark-tower" : isSkyscraper ? "skyscraper" : "building",
+        }));
       }
     }
   }
