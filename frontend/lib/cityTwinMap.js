@@ -7,6 +7,18 @@ import turfCentroid from "@turf/centroid";
 
 const EMPTY = { type: "FeatureCollection", features: [] };
 const LONDON_CENTER = [-0.1276, 51.5072];
+const AUTO_IMPROVEMENT_CENTER_BBOX = [-0.22, 51.475, -0.035, 51.535];
+const AUTO_IMPROVEMENT_OVERVIEW_CAMERA = {
+  center: LONDON_CENTER,
+  zoom: 10.65,
+  pitch: 48,
+  bearing: -12,
+  duration: 1600,
+};
+const AUTO_IMPROVEMENT_FIT_MAX_ZOOM = 14.65;
+const AUTO_ORBIT_ZOOM_MIN = 12.75;
+const AUTO_ORBIT_ZOOM_MAX = 14.15;
+const AUTO_ORBIT_DURATION_MS = 8500;
 // Coarse Greater London administrative outline (lng/lat), kept slightly inside
 // the real GLA boundary so auto-picked zones never spill into the home counties
 // or the sea. Used to constrain the "Auto" zone picker.
@@ -116,6 +128,7 @@ export function initCityTwinMap(options = {}) {
     onPopulation: options.onPopulation || noop,
     onImpact: options.onImpact || noop,
     onToast: options.onToast || noop,
+    onAutoInterrupted: options.onAutoInterrupted || noop,
   };
 
   const initialTheme = options.initialTheme === "light" ? "light" : "dark";
@@ -154,6 +167,11 @@ export function initCityTwinMap(options = {}) {
     settledContextTimer: null,
     lastGeneratedFeatures: [],
     toastTimer: null,
+    autoOrbitTimer: null,
+    autoOrbitAbortController: null,
+    renderVersion: 0,
+    lastSuccessfulRenderVersion: 0,
+    lastSuccessfulRenderFeatureCount: 0,
     mapReady: false,
     layersReady: false,
     settings: { ...defaultSettings, ...(options.initialSettings || {}) },
@@ -201,11 +219,18 @@ export function initCityTwinMap(options = {}) {
   });
 
   map.on("click", (event) => {
-    if (event.originalEvent.target.closest(".maplibregl-marker")) {
+    const target = event.originalEvent.target;
+    if (target instanceof Element && target.closest(".maplibregl-marker")) {
       return;
     }
+    emit.onAutoInterrupted();
     addVertex([event.lngLat.lng, event.lngLat.lat]);
   });
+
+  map.on("dragstart", stopAutoOnUserCameraInput);
+  map.on("zoomstart", stopAutoOnUserCameraInput);
+  map.on("rotatestart", stopAutoOnUserCameraInput);
+  map.on("pitchstart", stopAutoOnUserCameraInput);
 
   function setAllowWater(on) {
     const next = Boolean(on);
@@ -241,6 +266,20 @@ export function initCityTwinMap(options = {}) {
       74,
       `${theme === "light" ? "Light" : "Dark"} theme loaded. Restoring generated layers...`,
     );
+  }
+
+  function stopAutoOnUserCameraInput(event) {
+    if (!event.originalEvent) {
+      return;
+    }
+
+    const hadOrbit =
+      state.autoOrbitTimer !== null || state.autoOrbitAbortController !== null;
+    if (hadOrbit) {
+      stopAutoOrbit();
+      emit.onToast("Auto improvement paused because you moved the map.");
+    }
+    emit.onAutoInterrupted();
   }
 
   function initialiseMapLayers() {
@@ -759,6 +798,7 @@ export function initCityTwinMap(options = {}) {
     state.contextKey = "";
     state.contextStatus = "empty";
     state.latestStats = createEmptyContextStats();
+    state.lastSuccessfulRenderFeatureCount = 0;
     renderVertexMarkers();
     setSourceData("selection", EMPTY);
     setSourceData("context", EMPTY);
@@ -809,69 +849,262 @@ export function initCityTwinMap(options = {}) {
     return inside;
   }
 
-  // Pick a fresh, randomly placed neighbourhood-scale zone anywhere inside the
-  // Greater London boundary. Each call yields a different area; the whole polygon
-  // is constrained to London (retried until every vertex falls inside the ring).
-  function loadAutoZone() {
-    const ring = GREATER_LONDON_RING;
-    const [minLng, minLat, maxLng, maxLat] = turfBbox({
-      type: "Polygon",
-      coordinates: [ring],
-    });
-    const random = Math.random;
+  function abortError() {
+    return new DOMException("Auto improvement aborted", "AbortError");
+  }
 
-    for (let attempt = 0; attempt < 80; attempt += 1) {
+  function throwIfAborted(signal) {
+    if (signal?.aborted) {
+      throw abortError();
+    }
+  }
+
+  function sleep(ms, signal) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(abortError());
+        return;
+      }
+
+      const timer = window.setTimeout(resolve, ms);
+
+      signal?.addEventListener(
+        "abort",
+        () => {
+          window.clearTimeout(timer);
+          reject(abortError());
+        },
+        { once: true },
+      );
+    });
+  }
+
+  function prefersReducedMotion() {
+    return (
+      window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true
+    );
+  }
+
+  function easeToAsync(camera, signal) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(abortError());
+        return;
+      }
+
+      let settled = false;
+      let safetyTimer = null;
+
+      const cleanup = () => {
+        map.off("moveend", onMoveEnd);
+        signal?.removeEventListener("abort", onAbort);
+        window.clearTimeout(safetyTimer);
+      };
+
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve();
+      };
+
+      const onMoveEnd = () => finish();
+
+      const onAbort = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        map.stop();
+        reject(abortError());
+      };
+
+      signal?.addEventListener("abort", onAbort, { once: true });
+      map.once("moveend", onMoveEnd);
+      map.easeTo(camera);
+
+      safetyTimer = window.setTimeout(
+        finish,
+        Math.max(100, Number(camera.duration || 0) + 250),
+      );
+    });
+  }
+
+  async function flyToLondonOverview(options = {}) {
+    const signal = options.signal;
+    throwIfAborted(signal);
+
+    setStatus(
+      24,
+      "Flying to a London overview before choosing an improvement area...",
+    );
+
+    await easeToAsync(
+      {
+        ...AUTO_IMPROVEMENT_OVERVIEW_CAMERA,
+        duration: prefersReducedMotion()
+          ? 0
+          : AUTO_IMPROVEMENT_OVERVIEW_CAMERA.duration,
+      },
+      signal,
+    );
+  }
+
+  function buildRandomAutoImprovementVertices(random = Math.random) {
+    const [minLng, minLat, maxLng, maxLat] =
+      AUTO_IMPROVEMENT_CENTER_BBOX;
+
+    for (let attempt = 0; attempt < 100; attempt += 1) {
       const center = [
         randomRange(random, minLng, maxLng),
         randomRange(random, minLat, maxLat),
       ];
-      if (!pointInRing(center, ring)) {
+
+      if (!pointInRing(center, GREATER_LONDON_RING)) {
         continue;
       }
 
-      const vertexCount = Math.floor(randomRange(random, 4, 6.999)); // 4..6
-      const baseRadiusKm = randomRange(random, 0.55, 1.0);
+      const vertexCount = Math.floor(randomRange(random, 5, 8.999)); // 5..8
+      const baseRadiusKm = randomRange(random, 0.42, 0.82);
       const rotation = randomRange(random, 0, Math.PI * 2);
       const metersPerDegLat = 111320;
-      const metersPerDegLng = 111320 * Math.cos((center[1] * Math.PI) / 180);
+      const metersPerDegLng =
+        111320 * Math.cos((center[1] * Math.PI) / 180);
 
       const vertices = [];
       let valid = true;
+
       for (let i = 0; i < vertexCount; i += 1) {
         const angle =
           rotation +
           (i / vertexCount) * Math.PI * 2 +
-          randomRange(random, -0.22, 0.22);
-        const radiusKm = baseRadiusKm * randomRange(random, 0.78, 1.22);
+          randomRange(random, -0.28, 0.28);
+
+        const radiusKm = baseRadiusKm * randomRange(random, 0.68, 1.28);
         const dx = Math.cos(angle) * radiusKm * 1000;
         const dy = Math.sin(angle) * radiusKm * 1000;
-        const lng = center[0] + dx / metersPerDegLng;
-        const lat = center[1] + dy / metersPerDegLat;
-        if (!pointInRing([lng, lat], ring)) {
+
+        const vertex = [
+          center[0] + dx / metersPerDegLng,
+          center[1] + dy / metersPerDegLat,
+        ];
+
+        if (!pointInRing(vertex, GREATER_LONDON_RING)) {
           valid = false;
           break;
         }
-        vertices.push([lng, lat]);
+
+        vertices.push(vertex);
       }
+
       if (!valid) {
         continue;
       }
 
+      const areaSqm = turfArea(polygonFeature(vertices));
+      const areaKm2 = areaSqm / 1_000_000;
+
+      if (areaKm2 < 0.35 || areaKm2 > 2.4) {
+        continue;
+      }
+
+      return vertices;
+    }
+
+    return [
+      [-0.1399, 51.5077],
+      [-0.1216, 51.5094],
+      [-0.1148, 51.5024],
+      [-0.1264, 51.4966],
+      [-0.1448, 51.5009],
+    ];
+  }
+
+  async function pickAutoImprovementZone(options = {}) {
+    const signal = options.signal;
+    const reveal = options.reveal !== false;
+    throwIfAborted(signal);
+
+    const vertices = buildRandomAutoImprovementVertices(Math.random);
+
+    state.contextKey = "";
+    state.statsCache = null;
+    state.lastGeneratedFeatures = [];
+    state.contextFeatures = [];
+    state.contextStatus = "empty";
+    state.lastSuccessfulRenderFeatureCount = 0;
+    setSourceData("context", EMPTY);
+    setSourceData("generated", EMPTY);
+
+    setStatus(
+      30,
+      "Choosing a random central London neighbourhood boundary...",
+    );
+
+    if (reveal && !prefersReducedMotion()) {
+      state.vertices = [];
+      renderVertexMarkers();
+      updateSelectionSource();
+
+      for (let index = 0; index < vertices.length; index += 1) {
+        throwIfAborted(signal);
+        state.vertices = vertices.slice(0, index + 1);
+        renderVertexMarkers();
+        updateSelectionSource();
+        await sleep(900 / vertices.length, signal);
+      }
+    } else {
       state.vertices = vertices;
       renderVertexMarkers();
       updateSelectionSource();
-      fitToZone({ animated: true });
-      queueInitialContextFetch();
-      schedulePopulationFetch();
-      scheduleImpactFetch();
-      showToast(
-        "Auto-picked a fresh London zone. Click Auto again for another, or drag points to reshape.",
-      );
-      return;
     }
 
-    // Extremely unlikely fallback if sampling never lands inside the ring.
-    loadDemoZone();
+    fitToZone({
+      animated: !prefersReducedMotion(),
+      durationMs: prefersReducedMotion() ? 0 : 1200,
+      maxZoom: AUTO_IMPROVEMENT_FIT_MAX_ZOOM,
+    });
+
+    const stopFitOnAbort = () => map.stop();
+    signal?.addEventListener("abort", stopFitOnAbort, { once: true });
+    try {
+      await sleep(prefersReducedMotion() ? 0 : 1250, signal);
+    } finally {
+      signal?.removeEventListener("abort", stopFitOnAbort);
+    }
+
+    queueInitialContextFetch();
+    schedulePopulationFetch();
+    scheduleImpactFetch();
+
+    showToast("Auto improvement selected a neighbourhood-scale London area.");
+  }
+
+  // Compatibility path for the old autoZone handle. The guided React flow calls
+  // pickAutoImprovementZone instead.
+  function loadAutoZone() {
+    state.vertices = buildRandomAutoImprovementVertices(Math.random);
+    state.contextKey = "";
+    state.statsCache = null;
+    state.lastGeneratedFeatures = [];
+    state.contextFeatures = [];
+    state.contextStatus = "empty";
+    state.lastSuccessfulRenderFeatureCount = 0;
+    setSourceData("context", EMPTY);
+    setSourceData("generated", EMPTY);
+    renderVertexMarkers();
+    updateSelectionSource();
+    fitToZone({
+      animated: true,
+      maxZoom: AUTO_IMPROVEMENT_FIT_MAX_ZOOM,
+    });
+    queueInitialContextFetch();
+    schedulePopulationFetch();
+    scheduleImpactFetch();
+    showToast("Auto improvement selected a neighbourhood-scale London area.");
   }
 
   function fitPadding() {
@@ -896,6 +1129,14 @@ export function initCityTwinMap(options = {}) {
 
   function fitToZone(options = {}) {
     const animated = options.animated === true;
+    const durationMs = Number.isFinite(options.durationMs)
+      ? options.durationMs
+      : animated
+        ? 760
+        : 0;
+    const maxZoom = Number.isFinite(options.maxZoom)
+      ? options.maxZoom
+      : 15.2;
     map.resize();
     if (state.vertices.length === 0) {
       map.easeTo({
@@ -903,7 +1144,11 @@ export function initCityTwinMap(options = {}) {
         zoom: 12.4,
         pitch: 57,
         bearing: -18,
-        duration: animated ? 700 : 0,
+        duration: Number.isFinite(options.durationMs)
+          ? options.durationMs
+          : animated
+            ? 700
+            : 0,
       });
       return;
     }
@@ -915,8 +1160,8 @@ export function initCityTwinMap(options = {}) {
       padding: fitPadding(),
       pitch: 57,
       bearing: -18,
-      duration: animated ? 760 : 0,
-      maxZoom: 15.2,
+      duration: durationMs,
+      maxZoom,
     });
   }
 
@@ -942,6 +1187,9 @@ export function initCityTwinMap(options = {}) {
         .setLngLat(coord)
         .addTo(map);
 
+      marker.on("dragstart", () => {
+        emit.onAutoInterrupted();
+      });
       marker.on("drag", () => {
         const lngLat = marker.getLngLat();
         state.vertices[index] = [lngLat.lng, lngLat.lat];
@@ -961,11 +1209,13 @@ export function initCityTwinMap(options = {}) {
       element.addEventListener("dblclick", (event) => {
         event.preventDefault();
         event.stopPropagation();
+        emit.onAutoInterrupted();
         removeVertex(index);
       });
       element.addEventListener("contextmenu", (event) => {
         event.preventDefault();
         event.stopPropagation();
+        emit.onAutoInterrupted();
         removeVertex(index);
       });
 
@@ -1000,6 +1250,7 @@ export function initCityTwinMap(options = {}) {
       element.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
+        emit.onAutoInterrupted();
         state.vertices.splice(nextIndex, 0, coord);
         renderVertexMarkers();
         updateSelectionSource();
@@ -2242,6 +2493,17 @@ out body geom qt;
       type: "FeatureCollection",
       features: generated.features,
     });
+    state.renderVersion += 1;
+    state.lastSuccessfulRenderVersion = state.renderVersion;
+    state.lastSuccessfulRenderFeatureCount = generated.features.length;
+    window.dispatchEvent(
+      new CustomEvent("urbanflux:plan-rendered", {
+        detail: {
+          version: state.renderVersion,
+          featureCount: generated.features.length,
+        },
+      }),
+    );
     updateMetrics(generated.metrics);
     updatePills(stats);
     setStatus(
@@ -2254,8 +2516,145 @@ out body geom qt;
         ? "Road fill is 0%. Road generation is disabled; zoning still respects water and the selected boundary."
         : stats.anchors.length > 0
           ? `Connected ${generated.metrics.roadLinks} boundary road anchors with a sparse, one-pass road network. Drag any point to see live replanning.`
-          : "No connectable OSM roads found near this boundary yet. Try expanding the polygon or wait for the context layer.",
+        : "No connectable OSM roads found near this boundary yet. Try expanding the polygon or wait for the context layer.",
     );
+  }
+
+  function waitForPlanRender(options = {}) {
+    const signal = options.signal;
+    const timeoutMs = options.timeoutMs ?? 10000;
+    const minGeneratedFeatures = options.minGeneratedFeatures ?? 1;
+    const startVersion = state.lastSuccessfulRenderVersion;
+
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(abortError());
+        return;
+      }
+
+      let settled = false;
+
+      const cleanup = () => {
+        window.removeEventListener("urbanflux:plan-rendered", onRendered);
+        signal?.removeEventListener("abort", onAbort);
+        window.clearTimeout(timeout);
+      };
+
+      const finish = (value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(value);
+      };
+
+      const onRendered = (event) => {
+        const detail = event.detail || {};
+        if (
+          detail.version > startVersion &&
+          detail.featureCount >= minGeneratedFeatures
+        ) {
+          finish(true);
+        }
+      };
+
+      const onAbort = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        reject(abortError());
+      };
+
+      const timeout = window.setTimeout(() => finish(false), timeoutMs);
+
+      window.addEventListener("urbanflux:plan-rendered", onRendered);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  function selectedZoneCenter() {
+    if (state.vertices.length >= MIN_POLYGON_VERTICES) {
+      return turfCentroid(polygonFeature(state.vertices)).geometry.coordinates;
+    }
+
+    return LONDON_CENTER;
+  }
+
+  function startAutoOrbit(options = {}) {
+    stopAutoOrbit();
+
+    const signal = options.signal;
+    const controller = new AbortController();
+    state.autoOrbitAbortController = controller;
+
+    signal?.addEventListener(
+      "abort",
+      () => {
+        controller.abort();
+        stopAutoOrbit();
+      },
+      { once: true },
+    );
+
+    if (prefersReducedMotion()) {
+      setStatus(
+        96,
+        "Auto improvement complete. Reduced-motion mode keeps the improved scenario still.",
+      );
+      return;
+    }
+
+    const orbitOnce = () => {
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      const nextBearing = map.getBearing() + 26;
+      const currentZoom = map.getZoom();
+      const nextZoom =
+        currentZoom > (AUTO_ORBIT_ZOOM_MIN + AUTO_ORBIT_ZOOM_MAX) / 2
+          ? AUTO_ORBIT_ZOOM_MIN
+          : AUTO_ORBIT_ZOOM_MAX;
+
+      map.easeTo({
+        center: selectedZoneCenter(),
+        bearing: nextBearing,
+        pitch: 60,
+        zoom: nextZoom,
+        duration: AUTO_ORBIT_DURATION_MS,
+        easing: (t) => t * (2 - t),
+      });
+
+      state.autoOrbitTimer = window.setTimeout(
+        orbitOnce,
+        AUTO_ORBIT_DURATION_MS + 250,
+      );
+    };
+
+    setStatus(
+      96,
+      "Auto improvement complete. Slowly orbiting the greener scenario...",
+    );
+    orbitOnce();
+  }
+
+  function stopAutoOrbit() {
+    const hadOrbit =
+      state.autoOrbitTimer !== null || state.autoOrbitAbortController !== null;
+
+    window.clearTimeout(state.autoOrbitTimer);
+    state.autoOrbitTimer = null;
+
+    const controller = state.autoOrbitAbortController;
+    state.autoOrbitAbortController = null;
+    controller?.abort();
+
+    if (hadOrbit) {
+      map.stop();
+    }
   }
 
   function waterContextReady() {
@@ -4500,6 +4899,7 @@ out body geom qt;
   }
 
   function destroy() {
+    stopAutoOrbit();
     if (state.generationRaf !== null) {
       cancelAnimationFrame(state.generationRaf);
     }
@@ -4525,6 +4925,11 @@ out body geom qt;
     setAllowWater,
     loadDemo: () => loadDemoZone(true),
     autoZone: loadAutoZone,
+    flyToLondonOverview,
+    pickAutoImprovementZone,
+    waitForPlanRender,
+    startAutoOrbit,
+    stopAutoOrbit,
     clearZone,
     undo: undoVertex,
     fit: fitToZone,

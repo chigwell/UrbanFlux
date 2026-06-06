@@ -13,7 +13,11 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
-import type { CityTwinSettingKey, CityTwinSettings } from "@/lib/cityTwinMap";
+import type {
+  AutoImprovementMode,
+  CityTwinSettingKey,
+  CityTwinSettings,
+} from "@/lib/cityTwinMap";
 import { CollapsiblePanel } from "./CollapsiblePanel";
 
 const SLIDERS: {
@@ -71,10 +75,16 @@ interface ControlsCardProps {
   settings: CityTwinSettings;
   allowWater: boolean;
   isDark: boolean;
+  autoRunning: boolean;
+  autoMode: AutoImprovementMode;
+  controlsOpen: boolean;
+  onControlsOpenChange: (open: boolean) => void;
+  onStartAutoImprovement: () => void;
+  onStopAutoImprovement: () => void;
+  onRestartAutoImprovement: () => void;
   onSetting: (key: CityTwinSettingKey, value: number) => void;
   onAllowWater: (on: boolean) => void;
   onToggleTheme: (dark: boolean) => void;
-  onAuto: () => void;
   onDemo: () => void;
   onUndo: () => void;
   onClear: () => void;
@@ -85,22 +95,71 @@ export function ControlsCard({
   settings,
   allowWater,
   isDark,
+  autoRunning,
+  autoMode,
+  controlsOpen,
+  onControlsOpenChange,
+  onStartAutoImprovement,
+  onStopAutoImprovement,
+  onRestartAutoImprovement,
   onSetting,
   onAllowWater,
   onToggleTheme,
-  onAuto,
   onDemo,
   onUndo,
   onClear,
   onFit,
 }: ControlsCardProps) {
+  const autoStatus = {
+    overview: "Flying to a London overview...",
+    selecting: "Choosing a neighbourhood-scale site...",
+    "waiting-initial-plan": "Waiting for replanning to render...",
+    tuning: "Applying greener planning parameters...",
+    "waiting-improved-plan": "Rebuilding the improved plan...",
+    orbiting: "Orbiting the improved scenario...",
+    idle: "",
+  }[autoMode];
+
   return (
-    <CollapsiblePanel title="Urban controls" meta="Scenario">
+    <CollapsiblePanel
+      title="Urban controls"
+      meta={autoRunning ? "Auto" : "Scenario"}
+      open={controlsOpen}
+      onOpenChange={onControlsOpenChange}
+    >
       <div className="flex flex-col gap-4">
-        <Button size="sm" onClick={onAuto} className="rounded-none p-4">
-          <SparklesIcon data-icon="inline-start" />
-          Auto-pick an area
-        </Button>
+        {autoRunning ? (
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={onStopAutoImprovement}
+              className="rounded-none p-4"
+            >
+              Stop
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onRestartAutoImprovement}
+              className="rounded-none p-4"
+            >
+              Restart
+            </Button>
+          </div>
+        ) : (
+          <Button
+            size="sm"
+            onClick={onStartAutoImprovement}
+            className="rounded-none p-4"
+          >
+            <SparklesIcon data-icon="inline-start" />
+            Auto improvement
+          </Button>
+        )}
+        {autoRunning ? (
+          <p className="text-xs text-muted-foreground">{autoStatus}</p>
+        ) : null}
         <div className="grid grid-cols-2 gap-2">
           <Button
             size="sm"

@@ -8,6 +8,8 @@ interface BottomSheetProps {
   peek: React.ReactNode;
   children: React.ReactNode;
   className?: string;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 }
 
 const DRAG_THRESHOLD = 56;
@@ -18,13 +20,20 @@ const TAP_TOLERANCE = 6;
  * interactive in the area above the collapsed peek; drag (or tap) the handle to
  * expand to a tall, scrollable panel. Rendered only below `md` by the caller.
  */
-export function BottomSheet({ peek, children, className }: BottomSheetProps) {
-  const [expanded, setExpanded] = useState(false);
+export function BottomSheet({
+  peek,
+  children,
+  className,
+  expanded: controlledExpanded,
+  onExpandedChange,
+}: BottomSheetProps) {
+  const [internalExpanded, setInternalExpanded] = useState(false);
   const [drag, setDrag] = useState<number | null>(null);
   const [peekHeight, setPeekHeight] = useState(88);
   const headerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const startY = useRef(0);
+  const expanded = controlledExpanded ?? internalExpanded;
 
   // Keep the collapsed translate exactly equal to the header height, so the peek
   // shows the handle + summary and nothing more, whatever the summary text is.
@@ -43,6 +52,18 @@ export function BottomSheet({ peek, children, className }: BottomSheetProps) {
   const collapsedTranslate = `calc(100% - ${peekHeight}px)`;
   const base = expanded ? "0px" : collapsedTranslate;
   const translate = drag === null ? base : `calc(${base} + ${drag}px)`;
+
+  const setExpandedState = (
+    next: boolean | ((value: boolean) => boolean),
+  ) => {
+    const resolved = typeof next === "function" ? next(expanded) : next;
+
+    if (controlledExpanded === undefined) {
+      setInternalExpanded(resolved);
+    }
+
+    onExpandedChange?.(resolved);
+  };
 
   const onPointerDown = (event: React.PointerEvent) => {
     dragging.current = true;
@@ -68,11 +89,11 @@ export function BottomSheet({ peek, children, className }: BottomSheetProps) {
     dragging.current = false;
     const delta = drag ?? 0;
     if (Math.abs(delta) < TAP_TOLERANCE) {
-      setExpanded((value) => !value); // treat as a tap
+      setExpandedState((value) => !value); // treat as a tap
     } else if (expanded && delta > DRAG_THRESHOLD) {
-      setExpanded(false);
+      setExpandedState(false);
     } else if (!expanded && delta < -DRAG_THRESHOLD) {
-      setExpanded(true);
+      setExpandedState(true);
     }
     setDrag(null);
   };
