@@ -4,115 +4,44 @@ import turfBuffer from "@turf/buffer";
 import turfBooleanIntersects from "@turf/boolean-intersects";
 import turfArea from "@turf/area";
 import turfCentroid from "@turf/centroid";
-
-const EMPTY = { type: "FeatureCollection", features: [] };
-const LONDON_CENTER = [-0.1276, 51.5072];
-const AUTO_IMPROVEMENT_CENTER_BBOX = [-0.22, 51.475, -0.035, 51.535];
-const AUTO_IMPROVEMENT_OVERVIEW_CAMERA = {
-  center: LONDON_CENTER,
-  zoom: 10.65,
-  pitch: 48,
-  bearing: -12,
-  duration: 1600,
-};
-const AUTO_IMPROVEMENT_FIT_MAX_ZOOM = 14.65;
-const AUTO_ORBIT_ZOOM_MIN = 12.75;
-const AUTO_ORBIT_ZOOM_MAX = 14.15;
-const AUTO_ORBIT_DURATION_MS = 8500;
-// Coarse Greater London administrative outline (lng/lat), kept slightly inside
-// the real GLA boundary so auto-picked zones never spill into the home counties
-// or the sea. Used to constrain the "Auto" zone picker.
-const GREATER_LONDON_RING = [
-  [-0.3, 51.66],
-  [-0.07, 51.69],
-  [0.04, 51.66],
-  [0.28, 51.6],
-  [0.3, 51.53],
-  [0.17, 51.46],
-  [0.06, 51.31],
-  [-0.06, 51.3],
-  [-0.2, 51.33],
-  [-0.31, 51.36],
-  [-0.45, 51.45],
-  [-0.51, 51.51],
-  [-0.48, 51.6],
-  [-0.3, 51.66],
-];
-const MAP_STYLES = {
-  dark: "https://tiles.openfreemap.org/styles/dark",
-  light: "https://tiles.openfreemap.org/styles/positron",
-};
-const OVERPASS_ENDPOINTS = [
-  "https://overpass-api.de/api/interpreter",
-  "https://overpass.private.coffee/api/interpreter",
-  "https://overpass.kumi.systems/api/interpreter",
-];
-const EARTH_RADIUS_METERS = 6371008.8;
-const DEG_TO_RAD = Math.PI / 180;
-const RAD_TO_DEG = 180 / Math.PI;
-const CONNECTABLE_HIGHWAYS = new Set([
-  "primary",
-  "primary_link",
-  "secondary",
-  "secondary_link",
-  "tertiary",
-  "tertiary_link",
-  "unclassified",
-  "residential",
-  "living_street",
-  "service",
-  "pedestrian",
-]);
-const VECTOR_CONTEXT_SOURCE_LAYERS = {
-  road: ["transportation", "transportation_name", "roads", "road"],
-  water: ["water", "waterway", "physical_line"],
-  building: ["building", "buildings"],
-  park: ["park", "landcover", "landuse", "landuse_p", "physical_point"],
-};
-const CUSTOM_LAYER_PREFIXES = [
-  "selection-",
-  "context-",
-  "generated-",
-  "anchor-",
-];
-const MIN_POLYGON_VERTICES = 4;
-const WATER_POLYGON_EXCLUSION_KM = 0.038;
-const WATER_RIVER_LINE_EXCLUSION_KM = 0.15;
-const WATER_CANAL_LINE_EXCLUSION_KM = 0.08;
-const WATER_MINOR_LINE_EXCLUSION_KM = 0.05;
-const WATER_DEFAULT_LINE_EXCLUSION_KM = 0.075;
-const MAX_WATER_OBSTACLES = 400;
-const CONTEXT_CACHE_MAX = 8;
-const OVERPASS_COOLDOWN_MS = 90_000;
-const OVERPASS_BBOX_CACHE_MAX = 12;
-const CONTEXT_FETCH_DEBOUNCE_MS = 520;
-// Per-kind caps for fetched context. A single flat cap let dense road counts
-// (tens of thousands in central London) starve water/building/park down to zero,
-// which removed the river masks and let the plan build over the Thames.
-const CONTEXT_KIND_BUDGETS = {
-  road: 1200,
-  water: 500,
-  building: 600,
-  park: 250,
-};
-const WATER_CONTEXT_READY_STATES = new Set(["vector", "osm", "partial"]);
-// Backend that estimates population for the selected polygon. Overridable at
-// build time (NEXT_PUBLIC_* is inlined by Next, even with output: "export").
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "https://api.urbanflux.london";
-const POPULATION_FETCH_DEBOUNCE_MS = 600;
-const IMPACT_FETCH_DEBOUNCE_MS = 600;
-
-export function cityTwinSettingsToReplanningParams(settings) {
-  return {
-    housing_density: Math.round(settings.density),
-    green_space_target: Math.round(settings.green),
-    parking_pressure: Math.round(settings.parking),
-    road_fill: Math.round(settings.street),
-    road_alignment: Math.round(settings.alignment),
-    height_ambition: Math.round(settings.height),
-  };
-}
+import {
+  API_BASE_URL,
+  AUTO_IMPROVEMENT_CENTER_BBOX,
+  AUTO_IMPROVEMENT_FIT_MAX_ZOOM,
+  AUTO_IMPROVEMENT_OVERVIEW_CAMERA,
+  AUTO_ORBIT_DURATION_MS,
+  AUTO_ORBIT_ZOOM_MAX,
+  AUTO_ORBIT_ZOOM_MIN,
+  CONNECTABLE_HIGHWAYS,
+  CONTEXT_CACHE_MAX,
+  CONTEXT_FETCH_DEBOUNCE_MS,
+  CONTEXT_KIND_BUDGETS,
+  CUSTOM_LAYER_PREFIXES,
+  DEG_TO_RAD,
+  EARTH_RADIUS_METERS,
+  EMPTY,
+  GREATER_LONDON_RING,
+  IMPACT_FETCH_DEBOUNCE_MS,
+  LONDON_CENTER,
+  MAP_STYLES,
+  MAX_WATER_OBSTACLES,
+  MIN_POLYGON_VERTICES,
+  OVERPASS_BBOX_CACHE_MAX,
+  OVERPASS_COOLDOWN_MS,
+  OVERPASS_ENDPOINTS,
+  POPULATION_FETCH_DEBOUNCE_MS,
+  RAD_TO_DEG,
+  VECTOR_CONTEXT_SOURCE_LAYERS,
+  WATER_CANAL_LINE_EXCLUSION_KM,
+  WATER_CONTEXT_READY_STATES,
+  WATER_DEFAULT_LINE_EXCLUSION_KM,
+  WATER_MINOR_LINE_EXCLUSION_KM,
+  WATER_POLYGON_EXCLUSION_KM,
+  WATER_RIVER_LINE_EXCLUSION_KM,
+} from "./cityTwinMap/constants";
+import { abortError, sleep, throwIfAborted } from "./cityTwinMap/async";
+import { cityTwinSettingsToReplanningParams } from "./cityTwinMap/settings";
+export { cityTwinSettingsToReplanningParams } from "./cityTwinMap/settings";
 
 export function initCityTwinMap(options = {}) {
   // View bridge: the engine no longer reaches into the DOM by id. React passes
@@ -847,36 +776,6 @@ export function initCityTwinMap(options = {}) {
       }
     }
     return inside;
-  }
-
-  function abortError() {
-    return new DOMException("Auto improvement aborted", "AbortError");
-  }
-
-  function throwIfAborted(signal) {
-    if (signal?.aborted) {
-      throw abortError();
-    }
-  }
-
-  function sleep(ms, signal) {
-    return new Promise((resolve, reject) => {
-      if (signal?.aborted) {
-        reject(abortError());
-        return;
-      }
-
-      const timer = window.setTimeout(resolve, ms);
-
-      signal?.addEventListener(
-        "abort",
-        () => {
-          window.clearTimeout(timer);
-          reject(abortError());
-        },
-        { once: true },
-      );
-    });
   }
 
   function prefersReducedMotion() {

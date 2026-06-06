@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from pathlib import Path
 from typing import Callable
 
 from impact import _normalise_source_url
@@ -43,6 +44,26 @@ Example output format:
 
 
 _NEMOTRON_TIMEOUT_S = 12
+_ENV_FILE = Path(__file__).resolve().with_name(".env")
+
+
+def _get_fal_key() -> str:
+    fal_key = os.getenv("FAL_KEY", "").strip()
+    if fal_key:
+        return fal_key
+
+    try:
+        for line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            if key.strip() == "FAL_KEY":
+                return value.strip().strip("'\"")
+    except OSError:
+        return ""
+
+    return ""
 
 
 def _validate_metric_sources(metrics: list[ImpactMetric], allowed_sources: set[str]) -> list[ImpactMetric]:
@@ -81,7 +102,7 @@ def _call_nemotron(prompt: str) -> tuple[list[ImpactMetric] | None, str]:
     Call Nemotron via fal.ai and parse the structured JSON response.
     Returns metrics plus a stable reason code for browser diagnostics.
     """
-    fal_key = os.getenv("FAL_KEY")
+    fal_key = _get_fal_key()
     if not fal_key:
         return None, "fal_key_missing"
 
