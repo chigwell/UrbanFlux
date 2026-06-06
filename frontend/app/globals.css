@@ -90,6 +90,7 @@
     --uf-glass-strong: oklch(1 0 0 / 85%);
     --uf-line: oklch(0.2 0 0 / 10%);
     --uf-glow: 0 30px 90px oklch(0.55 0.21 266 / 14%);
+    --uf-positive: oklch(0.596 0.145 163);
 }
 
 .dark {
@@ -134,6 +135,7 @@
     --uf-glass-strong: oklch(0.22 0.016 266 / 82%);
     --uf-line: oklch(1 0 0 / 10%);
     --uf-glow: 0 30px 100px oklch(0.72 0.17 268 / 18%);
+    --uf-positive: oklch(0.765 0.177 163);
 }
 
 @layer base {

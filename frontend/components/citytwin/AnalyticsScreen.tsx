@@ -43,14 +43,11 @@ interface AnalyticsScreenProps {
   layoutId: string;
 }
 
-const POSITIVE = "#059669"; // emerald-600
-const NEGATIVE = "#dc2626"; // red-600
-const NEUTRAL = "#94a3b8"; // slate-400
-
+// Theme-aware so bars flip with light/dark; values resolve from globals.css.
 const SIGN_COLOR: Record<ReturnType<typeof metricSign>, string> = {
-  positive: POSITIVE,
-  negative: NEGATIVE,
-  neutral: NEUTRAL,
+  positive: "var(--uf-positive)",
+  negative: "var(--destructive)",
+  neutral: "var(--muted-foreground)",
 };
 
 const chartConfig = {

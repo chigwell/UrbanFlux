@@ -227,6 +227,7 @@ export function ControlsCard({
                 step={1}
                 onValueChange={([value]) => onSetting(slider.key, value)}
                 aria-label={slider.label}
+                aria-valuetext={`${slider.label}: ${settings[slider.key]}`}
               />
               <span className="text-xs text-muted-foreground">
                 {slider.hint}
