@@ -116,9 +116,7 @@ jobs:
           FAL_KEY: ${{ secrets.FAL_KEY }}
         run: |
           umask 077
-          cat > /tmp/urbanflux-backend.env << EOF
-          FAL_KEY=${FAL_KEY}
-          EOF
+          printf 'FAL_KEY=%s\n' "${FAL_KEY}" > /tmp/urbanflux-backend.env
 
           scp -i ~/.ssh/urbanflux_deploy_key -P "${VPS_PORT}" \
             -o StrictHostKeyChecking=no -o BatchMode=yes -o IdentitiesOnly=yes \
@@ -155,6 +153,11 @@ jobs:
           if [ ! -f "data_sources/london_mapped_data_package/data/london_mapped_compact.sqlite3" ]; then
             python data_sources/setup_london_mapped_data.py
           fi
+
+          sudo -n mkdir -p "/etc/systemd/system/${SERVICE_NAME}.service.d"
+          printf '[Service]\nEnvironmentFile=/opt/urbanflux/backend/.env\n' \
+            | sudo -n tee "/etc/systemd/system/${SERVICE_NAME}.service.d/10-env.conf" > /dev/null
+          sudo -n chmod 600 "/opt/urbanflux/backend/.env"
 
           sudo -n systemctl daemon-reload
           sudo -n systemctl restart "${SERVICE_NAME}"
