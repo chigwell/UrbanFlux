@@ -1,106 +1,48 @@
-# London Mapped Data Package
+# London Mapped Data
 
-This folder bootstraps the standalone London mapped data package from public Cloudflare R2.
+This module provides London borough mapped data by coordinates.
 
-```text
-setup_london_mapped_data.py
-```
-
-The package resolves London boroughs from coordinates and returns mapped CSV data for the detected borough.
-
-## Public Bundle
+The first call automatically downloads and unpacks the public data bundle from Cloudflare R2:
 
 ```text
 https://pub-f20eb55e72ee41a5b80036ea8f6107bb.r2.dev/london_mapped_data_public_bundle.zip
 ```
 
-The public zip is sanitized:
+The bundle is sanitized: it does not contain `.env`, API tokens, LLM keys, or local `/Users/...` paths.
 
-```text
-No .env
-No API tokens
-No local /Users/... paths
-No LLM keys
-```
+## Quick Test
 
-## Setup On VPS
-
-From `backend/data_sources`:
+From the UrbanFlux repo root:
 
 ```bash
-python3 setup_london_mapped_data.py
+python3 backend/data_sources/test.py
 ```
 
-This downloads the zip from R2, unpacks:
+The first run downloads about `336MB` and unpacks about `3.1GB`.
 
-```text
-london_mapped_data_package/
-```
-
-and runs a smoke test.
-
-Then install the package:
-
-```bash
-cd london_mapped_data_package
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-```
-
-## Force Re-download
-
-```bash
-python3 setup_london_mapped_data.py --force
-```
-
-Keep the downloaded zip after unpacking:
-
-```bash
-python3 setup_london_mapped_data.py --keep-zip
-```
-
-## Python API
-
-Resolve borough only:
+## Use In Python
 
 ```python
-from london_mapped_data import resolve_borough
+from backend.data_sources import get_borough_data, get_borough_summary, resolve_borough
 
-borough = resolve_borough(51.5074, -0.1278)
+lat = 51.5074
+lon = -0.1278
+
+borough = resolve_borough(lat, lon)
+summary = get_borough_summary(lat, lon)
+housing = get_borough_data(lat, lon, theme="housing", limit=10)
 ```
 
-Get mapped data:
+For large result sets, use the iterator:
 
 ```python
-from london_mapped_data import get_borough_data
+from backend.data_sources import iter_borough_data
 
-result = get_borough_data(
-    lat=51.5074,
-    lon=-0.1278,
-    theme="planning_land",
-    limit=50,
-)
-```
-
-Lazy iteration for large result sets:
-
-```python
-from london_mapped_data import iter_borough_data
-
-for row in iter_borough_data(51.5074, -0.1278, theme="housing", batch_size=1000):
+for row in iter_borough_data(51.5074, -0.1278, theme="planning_land"):
     print(row)
 ```
 
-Summary for cards/charts:
-
-```python
-from london_mapped_data import get_borough_summary
-
-summary = get_borough_summary(51.5074, -0.1278)
-```
-
-## Supported Themes
+## Available Themes
 
 ```text
 planning_land
@@ -114,11 +56,23 @@ demographics
 other
 ```
 
+## Manual Download
+
+Usually this is not needed because imports auto-download the package. To do it manually:
+
+```bash
+cd backend/data_sources
+python3 setup_london_mapped_data.py
+```
+
+Force re-download:
+
+```bash
+python3 setup_london_mapped_data.py --force
+```
+
 ## Notes
 
-- The runtime package is Python-only.
-- It does not require FastAPI.
-- It uses SQLite and Python stdlib.
 - Coordinates must be WGS84 latitude/longitude.
-- If coordinates are outside London borough boundaries, `resolve_borough(...)` returns `None`.
-- `get_borough_data(..., limit=None)` may return a very large list. Prefer `iter_borough_data(...)` for production jobs.
+- If a point is outside London borough boundaries, `resolve_borough(...)` returns `None`.
+- `get_borough_data(..., limit=None)` can return a very large list; prefer `iter_borough_data(...)` for production.
