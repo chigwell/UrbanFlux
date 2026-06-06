@@ -71,7 +71,7 @@ export interface CityTwinImpactMetric {
   metric: string;
   value: string;
   delta: string;
-  /** London data-portal / benchmark URL backing the estimate. */
+  /** Validated London data-portal / benchmark URL backing the estimate, or empty when unavailable. */
   source: string;
 }
 

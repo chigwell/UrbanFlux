@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.request
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -278,7 +279,7 @@ class ImpactMetric(BaseModel):
     improved_metric: str = Field(..., description="Name of the improved metric.")
     improved_value: str = Field(..., description="Estimated metric value after replanning.")
     delta: str = Field(..., description="Difference compared with the previous or baseline value.")
-    source: str = Field(..., description="Source URL for the data, benchmark, or method.")
+    source: str = Field(..., description="Validated source URL, or an empty string if no valid source is available.")
 
 
 class ImpactRequest(BaseModel):
@@ -343,14 +344,19 @@ class BoroughDataTestResponse(BaseModel):
                             "theme": "housing",
                             "row_count": 200,
                             "dataset_title": "Example dataset",
+                            "dataset_url": "https://data.london.gov.uk/dataset/example/",
                             "resource_title": "Example resource",
+                            "csv_url": "https://data.london.gov.uk/download/example/example.csv",
                         }
                     ],
                     "latest_rows_by_theme": [
                         {
                             "theme": "housing",
                             "dataset_title": "Example dataset",
+                            "dataset_url": "https://data.london.gov.uk/dataset/example/",
                             "resource_title": "Example resource",
+                            "csv_url": "https://data.london.gov.uk/download/example/example.csv",
+                            "source_url": "https://data.london.gov.uk/dataset/example/",
                             "row_number": 42,
                             "date_start": "2024-01-01",
                             "date_end": "2024-12-31",
@@ -444,10 +450,10 @@ def _compute_impact_metrics(
     # Illustrative capacity uplift driven by denser blocks and taller massing.
     homes_capacity_uplift_pct = round((density * 26) + (height_ambition * 18), 1)
 
-    # --- Green space ---
-    # Each 1 % increase in green space cover in an LSOA correlates with
-    # ~0.15 °C reduction in summer peak temperature (UCL Urban Cooling, 2022).
-    temp_reduction = round(params.green_space_target * 0.15, 2)
+    # --- Local heat exposure ---
+    # Green space is a design target, not a direct weather forecast. Keep this
+    # as a conservative local microclimate proxy capped below 1 °C.
+    cooling_c = round(min(0.8, max(0, (params.green_space_target - 5) / 75 * 0.8)), 2)
 
     # --- Parking pressure ---
     # Surface parking pressure consumes land that could otherwise be used for
@@ -473,9 +479,9 @@ def _compute_impact_metrics(
             source="https://data.london.gov.uk/dataset/land-area-and-population-density-ward-and-borough-e1zp8/",
         ),
         ImpactMetric(
-            improved_metric="Summer peak temperature",
-            improved_value=f"-{temp_reduction} °C",
-            delta=f"-{temp_reduction} °C vs no green space change",
+            improved_metric="Local summer heat exposure",
+            improved_value=f"-{cooling_c} °C",
+            delta=f"-{cooling_c} °C local heat proxy vs low-greening scenario",
             source="https://www.london.gov.uk/programmes-strategies/environment-and-climate-change/climate-change/urban-greening",
         ),
         ImpactMetric(
@@ -511,8 +517,10 @@ Your task is to return a JSON array of impact metrics, using the benchmark value
 
 Rules:
 - Only use the sources and data provided. Do not hallucinate statistics, datasets, or sources.
+- The source field must be either "" or exactly one URL from the allowed source URLs list in the user prompt. Do not create, repair, shorten, or guess URLs.
 - If real borough data supports a more precise estimate, use it and cite the dataset.
 - If there is no relevant data for a metric, set improved_value and delta to "" (empty string).
+- Treat Local summer heat exposure as a conservative local microclimate / heat-exposure proxy only. Never describe it as citywide weather, forecast weather, or an actual air-temperature change across London.
 - Return ONLY a valid JSON array. No preamble, no explanation, no markdown, no code fences.
 - Every object in the array must have exactly these four string fields: improved_metric, improved_value, delta, source.
 
@@ -529,13 +537,84 @@ Example output format:
 
 _TRUSTED_THEMES = {"housing", "transport", "planning_land", "socioeconomic"}
 _NEMOTRON_TIMEOUT_S = 12  # wall-clock seconds before we fall back to benchmarks
+_SOURCE_VALIDATION_TIMEOUT_S = 2.5
+_SOURCE_VALIDATION_TTL_S = 6 * 60 * 60
+_SOURCE_VALIDATION_MAX_WORKERS = 5
+_SOURCE_VALIDATION_CACHE: dict[str, tuple[float, bool]] = {}
 
 
-def _fetch_borough_rows(lat: float, lon: float) -> str:
+def _normalise_source_url(url: object) -> str:
+    return str(url or "").strip()
+
+
+def _source_url_is_well_formed(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _source_url_is_live(url: str) -> bool:
+    if not url or not _source_url_is_well_formed(url):
+        return False
+
+    now = time.time()
+    cached = _SOURCE_VALIDATION_CACHE.get(url)
+    if cached and now - cached[0] < _SOURCE_VALIDATION_TTL_S:
+        return cached[1]
+
+    try:
+        import httpx
+
+        with httpx.Client(
+            follow_redirects=True,
+            timeout=_SOURCE_VALIDATION_TIMEOUT_S,
+            headers={"User-Agent": "UrbanFlux-source-check/1.0"},
+        ) as client:
+            response = client.head(url)
+            if response.status_code in {405, 501}:
+                response = client.get(url, headers={"Range": "bytes=0-0"})
+            is_live = response.status_code < 400
+    except Exception:
+        is_live = False
+
+    _SOURCE_VALIDATION_CACHE[url] = (now, is_live)
+    return is_live
+
+
+def _validate_metric_sources(metrics: list[ImpactMetric], allowed_sources: set[str]) -> list[ImpactMetric]:
+    candidate_sources = sorted({
+        source
+        for source in (_normalise_source_url(metric.source) for metric in metrics)
+        if source and source in allowed_sources and _source_url_is_well_formed(source)
+    })
+
+    with ThreadPoolExecutor(max_workers=_SOURCE_VALIDATION_MAX_WORKERS) as executor:
+        live_sources = {
+            source
+            for source, is_live in zip(
+                candidate_sources,
+                executor.map(_source_url_is_live, candidate_sources),
+            )
+            if is_live
+        }
+
+    return [
+        metric.model_copy(update={"source": source if source in live_sources else ""})
+        for metric in metrics
+        for source in [_normalise_source_url(metric.source)]
+    ]
+
+
+def _source_catalogue_text(allowed_sources: set[str]) -> str:
+    if not allowed_sources:
+        return "(none)"
+    return "\n".join(f"- {source}" for source in sorted(allowed_sources))
+
+
+def _fetch_borough_rows(lat: float, lon: float) -> tuple[str, set[str]]:
     """
     Pull the latest row preview for each trusted theme from Eugene's SQLite
-    via the live /borough-data-test endpoint. Returns a formatted string
-    for inclusion in the Nemotron prompt, or empty string on failure.
+    via the live /borough-data-test endpoint. Returns a formatted prompt
+    block plus the source URLs that Nemotron is allowed to cite.
     """
     try:
         params = urllib.parse.urlencode({"lat": lat, "lon": lon})
@@ -546,9 +625,10 @@ def _fetch_borough_rows(lat: float, lon: float) -> str:
         with urllib.request.urlopen(req, timeout=6) as resp:
             data = json.loads(resp.read())
     except Exception:
-        return ""
+        return "", set()
 
     lines = []
+    allowed_sources: set[str] = set()
     borough_name = (data.get("borough") or {}).get("name", "")
     if borough_name:
         lines.append(f"Borough: {borough_name}")
@@ -558,10 +638,20 @@ def _fetch_borough_rows(lat: float, lon: float) -> str:
             continue
         preview = (row.get("source_row_preview") or "").strip()
         date = row.get("date_start") or ""
+        source_url = row.get("source_url") or row.get("dataset_url") or row.get("csv_url") or ""
+        for source in (row.get("source_url"), row.get("dataset_url"), row.get("csv_url")):
+            source = _normalise_source_url(source)
+            if source:
+                allowed_sources.add(source)
+        dataset_title = row.get("dataset_title") or "Unknown dataset"
+        resource_title = row.get("resource_title") or "Unknown resource"
         if preview:
-            lines.append(f"[{row['theme']}] {date}: {preview}")
+            lines.append(
+                f"[{row['theme']}] {date}: {preview} "
+                f"(dataset: {dataset_title}; resource: {resource_title}; source: {source_url})"
+            )
 
-    return "\n".join(lines)
+    return "\n".join(lines), allowed_sources
 
 
 def _metrics_to_text(metrics: list[ImpactMetric]) -> str:
@@ -637,7 +727,13 @@ def _nemotron_impact_metrics(
     Falls back to benchmark metrics if Nemotron is too slow or unavailable.
     Returns (metrics, note).
     """
-    borough_rows = _fetch_borough_rows(lat, lon)
+    borough_rows, borough_sources = _fetch_borough_rows(lat, lon)
+    allowed_sources = {
+        _normalise_source_url(metric.source)
+        for metric in benchmark_metrics
+        if _normalise_source_url(metric.source)
+    }
+    allowed_sources.update(borough_sources)
     borough_name = ""
     for line in borough_rows.splitlines():
         if line.startswith("Borough:"):
@@ -663,6 +759,9 @@ Real borough data from London Datastore:
 Benchmark impact metrics (use as baseline):
 {_metrics_to_text(benchmark_metrics)}
 
+Allowed source URLs:
+{_source_catalogue_text(allowed_sources)}
+
 Return the refined JSON array of impact metrics."""
 
     with ThreadPoolExecutor(max_workers=1) as executor:
@@ -673,6 +772,7 @@ Return the refined JSON array of impact metrics."""
             nemotron_metrics = None
 
     if nemotron_metrics:
+        nemotron_metrics = _validate_metric_sources(nemotron_metrics, allowed_sources)
         note = (
             f"Refined by Nvidia Nemotron using real {borough_name} data"
             if borough_name else
@@ -685,7 +785,7 @@ Return the refined JSON array of impact metrics."""
         f"Benchmark estimates for {borough_name}" if borough_name
         else "Illustrative benchmark estimates"
     )
-    return benchmark_metrics, note
+    return _validate_metric_sources(benchmark_metrics, allowed_sources), note
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import main  # noqa: E402
+from utils import _format_latest_theme_row  # noqa: E402
 
 
 client = TestClient(main.app)
@@ -60,6 +61,8 @@ def test_population_endpoint_returns_selected_area_population(monkeypatch) -> No
 
 def test_impact_endpoint_returns_replanning_metrics(monkeypatch) -> None:
     monkeypatch.setattr(main, "_population_in_polygon", lambda geom: (2480, 5))
+    monkeypatch.setattr(main, "_fetch_borough_rows", lambda lat, lon: ("Borough: Westminster", set()))
+    monkeypatch.setattr(main, "_validate_metric_sources", lambda metrics, allowed_sources: metrics)
 
     response = client.post(
         "/impact",
@@ -83,6 +86,103 @@ def test_impact_endpoint_returns_replanning_metrics(monkeypatch) -> None:
     assert len(payload["metrics"]) == 5
     assert payload["metrics"][0]["improved_metric"] == "Cycling mode share"
     assert payload["note"] == "Benchmark estimates for Westminster"
+
+
+def test_default_heat_metric_is_local_and_capped() -> None:
+    metrics = main._compute_impact_metrics(2480, 0.42, main.ReplanningParams())
+    heat_metric = next(metric for metric in metrics if metric.improved_metric == "Local summer heat exposure")
+
+    assert heat_metric.improved_value == "-0.32 °C"
+    assert heat_metric.delta == "-0.32 °C local heat proxy vs low-greening scenario"
+
+
+def test_nemotron_prompt_restricts_sources_and_weather_claims() -> None:
+    prompt = main.NEMOTRON_IMPACT_SYSTEM_PROMPT
+
+    assert "exactly one URL from the allowed source URLs list" in prompt
+    assert "Never describe it as citywide weather" in prompt
+
+
+def test_validate_metric_sources_preserves_allowed_live_source(monkeypatch) -> None:
+    source = "https://data.london.gov.uk/dataset/example/"
+    metric = main.ImpactMetric(
+        improved_metric="Housing capacity",
+        improved_value="+1%",
+        delta="+1% vs baseline",
+        source=source,
+    )
+    monkeypatch.setattr(main, "_source_url_is_live", lambda url: True)
+
+    validated = main._validate_metric_sources([metric], {source})
+
+    assert validated[0].source == source
+
+
+def test_validate_metric_sources_blanks_unlisted_source(monkeypatch) -> None:
+    metric = main.ImpactMetric(
+        improved_metric="Housing capacity",
+        improved_value="+1%",
+        delta="+1% vs baseline",
+        source="https://invented.example/source",
+    )
+    monkeypatch.setattr(main, "_source_url_is_live", lambda url: True)
+
+    validated = main._validate_metric_sources([metric], {"https://data.london.gov.uk/dataset/example/"})
+
+    assert validated[0].source == ""
+
+
+def test_validate_metric_sources_blanks_dead_allowed_source(monkeypatch) -> None:
+    source = "https://data.london.gov.uk/dataset/example/"
+    metric = main.ImpactMetric(
+        improved_metric="Housing capacity",
+        improved_value="+1%",
+        delta="+1% vs baseline",
+        source=source,
+    )
+    monkeypatch.setattr(main, "_source_url_is_live", lambda url: False)
+
+    validated = main._validate_metric_sources([metric], {source})
+
+    assert validated[0].source == ""
+
+
+def test_validate_metric_sources_skips_empty_source(monkeypatch) -> None:
+    calls = []
+    metric = main.ImpactMetric(
+        improved_metric="Housing capacity",
+        improved_value="+1%",
+        delta="+1% vs baseline",
+        source="",
+    )
+    monkeypatch.setattr(main, "_source_url_is_live", lambda url: calls.append(url) or True)
+
+    validated = main._validate_metric_sources([metric], {"https://data.london.gov.uk/dataset/example/"})
+
+    assert validated[0].source == ""
+    assert calls == []
+
+
+def test_latest_theme_row_includes_source_links() -> None:
+    row = {
+        "row_number": 42,
+        "date_start": "2024-01-01",
+        "date_end": "2024-12-31",
+        "source": {
+            "dataset_title": "Housing data",
+            "dataset_url": "https://data.london.gov.uk/dataset/housing-data/",
+            "resource_title": "housing.csv",
+            "csv_url": "https://data.london.gov.uk/download/housing.csv",
+        },
+        "source_row": {"Area": "Westminster", "Value": 286},
+    }
+
+    formatted = _format_latest_theme_row("housing", row)
+
+    assert formatted["dataset_url"] == "https://data.london.gov.uk/dataset/housing-data/"
+    assert formatted["csv_url"] == "https://data.london.gov.uk/download/housing.csv"
+    assert formatted["source_url"] == "https://data.london.gov.uk/dataset/housing-data/"
+    assert formatted["source_row_preview"] == "Area: Westminster; Value: 286"
 
 
 def test_borough_data_test_endpoint_returns_mapped_data(monkeypatch) -> None:
