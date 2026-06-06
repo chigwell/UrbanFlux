@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-try:
-    from utils import _latest_rows_for_themes
-except ImportError:
-    from backend.utils import _latest_rows_for_themes
+from utils import _latest_rows_for_themes
 
 
 def _get_data_source_functions():

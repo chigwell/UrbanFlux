@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import urllib.request
 import urllib.parse
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
@@ -13,10 +15,11 @@ from pydantic import BaseModel, Field
 from shapely.geometry import shape
 from shapely.ops import unary_union
 
-try:
-    from borough_data import build_borough_data_test_response
-except ImportError:
-    from backend.borough_data import build_borough_data_test_response
+_BACKEND_DIR = Path(__file__).resolve().parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
+from borough_data import build_borough_data_test_response
 
 # ---------------------------------------------------------------------------
 # App setup
