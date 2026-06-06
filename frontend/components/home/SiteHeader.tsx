@@ -15,10 +15,13 @@ export function SiteHeader() {
         </Link>
         <div className="flex items-center gap-1.5">
           <ThemeToggle />
-          <Button asChild size="lg" className="rounded-none p-4">
+          <Button asChild size="lg" className="group rounded-none p-4">
             <Link href="/app">
               Open app
-              <ArrowRightIcon data-icon="inline-end" />
+              <ArrowRightIcon
+                data-icon="inline-end"
+                className="transition-transform duration-200 ease-out motion-safe:group-hover:translate-x-1"
+              />
             </Link>
           </Button>
         </div>
