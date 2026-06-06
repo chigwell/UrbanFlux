@@ -129,6 +129,7 @@ export function CityTwinApp() {
       onSetting={handleSetting}
       onAllowWater={handleAllowWater}
       onToggleTheme={handleToggleTheme}
+      onAuto={() => handleRef.current?.autoZone()}
       onDemo={() => handleRef.current?.loadDemo()}
       onUndo={() => handleRef.current?.undo()}
       onClear={() => handleRef.current?.clearZone()}

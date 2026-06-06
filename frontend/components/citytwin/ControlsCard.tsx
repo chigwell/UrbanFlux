@@ -1,6 +1,14 @@
 "use client";
 
-import { MoonIcon, RotateCcwIcon, SunIcon, Trash2Icon, Undo2Icon, MapPinnedIcon } from "lucide-react";
+import {
+  MoonIcon,
+  RotateCcwIcon,
+  SparklesIcon,
+  SunIcon,
+  Trash2Icon,
+  Undo2Icon,
+  MapPinnedIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
@@ -15,12 +23,48 @@ const SLIDERS: {
   max: number;
   hint: string;
 }[] = [
-  { key: "density", label: "Housing density", min: 5, max: 100, hint: "Homes per built block" },
-  { key: "green", label: "Green space target", min: 5, max: 80, hint: "Share reserved as parks" },
-  { key: "parking", label: "Parking pressure", min: 0, max: 80, hint: "Surface parking demand" },
-  { key: "street", label: "Road fill", min: 0, max: 100, hint: "Boundary anchors connected" },
-  { key: "alignment", label: "Road alignment", min: 0, max: 100, hint: "How straight corridors run" },
-  { key: "height", label: "Height ambition", min: 0, max: 100, hint: "Massing of tall buildings" },
+  {
+    key: "density",
+    label: "Housing density",
+    min: 5,
+    max: 100,
+    hint: "Homes per built block",
+  },
+  {
+    key: "green",
+    label: "Green space target",
+    min: 5,
+    max: 80,
+    hint: "Share reserved as parks",
+  },
+  {
+    key: "parking",
+    label: "Parking pressure",
+    min: 0,
+    max: 80,
+    hint: "Surface parking demand",
+  },
+  {
+    key: "street",
+    label: "Road fill",
+    min: 0,
+    max: 100,
+    hint: "Boundary anchors connected",
+  },
+  {
+    key: "alignment",
+    label: "Road alignment",
+    min: 0,
+    max: 100,
+    hint: "How straight corridors run",
+  },
+  {
+    key: "height",
+    label: "Height ambition",
+    min: 0,
+    max: 100,
+    hint: "Massing of tall buildings",
+  },
 ];
 
 interface ControlsCardProps {
@@ -30,6 +74,7 @@ interface ControlsCardProps {
   onSetting: (key: CityTwinSettingKey, value: number) => void;
   onAllowWater: (on: boolean) => void;
   onToggleTheme: (dark: boolean) => void;
+  onAuto: () => void;
   onDemo: () => void;
   onUndo: () => void;
   onClear: () => void;
@@ -43,6 +88,7 @@ export function ControlsCard({
   onSetting,
   onAllowWater,
   onToggleTheme,
+  onAuto,
   onDemo,
   onUndo,
   onClear,
@@ -51,20 +97,44 @@ export function ControlsCard({
   return (
     <CollapsiblePanel title="Urban controls" meta="Scenario">
       <div className="flex flex-col gap-4">
+        <Button size="sm" onClick={onAuto} className="rounded-none p-4">
+          <SparklesIcon data-icon="inline-start" />
+          Auto-pick an area
+        </Button>
         <div className="grid grid-cols-2 gap-2">
-          <Button size="sm" onClick={onDemo} className="rounded-none p-4">
-            <MapPinnedIcon data-icon="inline-start"  />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onDemo}
+            className="rounded-none p-4"
+          >
+            <MapPinnedIcon data-icon="inline-start" />
             Demo
           </Button>
-          <Button size="sm" variant="outline" onClick={onUndo} className="rounded-none p-4">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onUndo}
+            className="rounded-none p-4"
+          >
             <Undo2Icon data-icon="inline-start" />
             Undo
           </Button>
-          <Button size="sm" variant="outline" onClick={onClear} className="rounded-none p-4">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onClear}
+            className="rounded-none p-4"
+          >
             <Trash2Icon data-icon="inline-start" />
             Clear
           </Button>
-          <Button size="sm" variant="outline" onClick={onFit} className="rounded-none p-4">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onFit}
+            className="rounded-none p-4"
+          >
             <RotateCcwIcon data-icon="inline-start" />
             Refit
           </Button>
@@ -75,10 +145,18 @@ export function ControlsCard({
         <div className="flex flex-col gap-3">
           <label className="flex items-center justify-between gap-3 text-sm">
             <span className="flex items-center gap-2 font-medium">
-              {isDark ? <MoonIcon className="size-4" /> : <SunIcon className="size-4" />}
+              {isDark ? (
+                <MoonIcon className="size-4" />
+              ) : (
+                <SunIcon className="size-4" />
+              )}
               {isDark ? "Dark" : "Light"} basemap
             </span>
-            <Switch checked={isDark} onCheckedChange={onToggleTheme} aria-label="Toggle basemap theme" />
+            <Switch
+              checked={isDark}
+              onCheckedChange={onToggleTheme}
+              aria-label="Toggle basemap theme"
+            />
           </label>
           <label className="flex items-center justify-between gap-3 text-sm">
             <span className="font-medium">
@@ -114,7 +192,9 @@ export function ControlsCard({
                 onValueChange={([value]) => onSetting(slider.key, value)}
                 aria-label={slider.label}
               />
-              <span className="text-xs text-muted-foreground">{slider.hint}</span>
+              <span className="text-xs text-muted-foreground">
+                {slider.hint}
+              </span>
             </div>
           ))}
         </div>

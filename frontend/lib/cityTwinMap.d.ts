@@ -113,6 +113,8 @@ export interface CityTwinHandle {
   setTheme: (theme: CityTwinTheme) => void;
   setAllowWater: (on: boolean) => void;
   loadDemo: () => void;
+  /** Pick a fresh, randomly placed zone inside the Greater London boundary. */
+  autoZone: () => void;
   clearZone: () => void;
   undo: () => void;
   fit: () => void;

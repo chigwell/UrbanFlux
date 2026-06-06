@@ -7,6 +7,25 @@ import turfCentroid from "@turf/centroid";
 
 const EMPTY = { type: "FeatureCollection", features: [] };
 const LONDON_CENTER = [-0.1276, 51.5072];
+// Coarse Greater London administrative outline (lng/lat), kept slightly inside
+// the real GLA boundary so auto-picked zones never spill into the home counties
+// or the sea. Used to constrain the "Auto" zone picker.
+const GREATER_LONDON_RING = [
+  [-0.30, 51.66],
+  [-0.07, 51.69],
+  [0.04, 51.66],
+  [0.28, 51.60],
+  [0.30, 51.53],
+  [0.17, 51.46],
+  [0.06, 51.31],
+  [-0.06, 51.30],
+  [-0.20, 51.33],
+  [-0.31, 51.36],
+  [-0.45, 51.45],
+  [-0.51, 51.51],
+  [-0.48, 51.60],
+  [-0.30, 51.66],
+];
 const MAP_STYLES = {
   dark: "https://tiles.openfreemap.org/styles/dark",
   light: "https://tiles.openfreemap.org/styles/positron",
@@ -605,6 +624,84 @@ function loadDemoZone(showMessage = false) {
   if (showMessage) {
     showToast("Demo zone restored. Water override is off by default, so mapped rivers are excluded from generation.");
   }
+}
+
+// Ray-casting point-in-polygon against a single closed ring of [lng, lat] pairs.
+function pointInRing(point, ring) {
+  const [x, y] = point;
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    const intersects =
+      yi > y !== yj > y &&
+      x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+    if (intersects) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// Pick a fresh, randomly placed neighbourhood-scale zone anywhere inside the
+// Greater London boundary. Each call yields a different area; the whole polygon
+// is constrained to London (retried until every vertex falls inside the ring).
+function loadAutoZone() {
+  const ring = GREATER_LONDON_RING;
+  const [minLng, minLat, maxLng, maxLat] = turfBbox({
+    type: "Polygon",
+    coordinates: [ring],
+  });
+  const random = Math.random;
+
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const center = [
+      randomRange(random, minLng, maxLng),
+      randomRange(random, minLat, maxLat),
+    ];
+    if (!pointInRing(center, ring)) {
+      continue;
+    }
+
+    const vertexCount = Math.floor(randomRange(random, 4, 6.999)); // 4..6
+    const baseRadiusKm = randomRange(random, 0.55, 1.0);
+    const rotation = randomRange(random, 0, Math.PI * 2);
+    const metersPerDegLat = 111320;
+    const metersPerDegLng = 111320 * Math.cos((center[1] * Math.PI) / 180);
+
+    const vertices = [];
+    let valid = true;
+    for (let i = 0; i < vertexCount; i += 1) {
+      const angle =
+        rotation + (i / vertexCount) * Math.PI * 2 + randomRange(random, -0.22, 0.22);
+      const radiusKm = baseRadiusKm * randomRange(random, 0.78, 1.22);
+      const dx = Math.cos(angle) * radiusKm * 1000;
+      const dy = Math.sin(angle) * radiusKm * 1000;
+      const lng = center[0] + dx / metersPerDegLng;
+      const lat = center[1] + dy / metersPerDegLat;
+      if (!pointInRing([lng, lat], ring)) {
+        valid = false;
+        break;
+      }
+      vertices.push([lng, lat]);
+    }
+    if (!valid) {
+      continue;
+    }
+
+    state.vertices = vertices;
+    renderVertexMarkers();
+    updateSelectionSource();
+    fitToZone({ animated: true });
+    queueInitialContextFetch();
+    schedulePopulationFetch();
+    scheduleImpactFetch();
+    showToast("Auto-picked a fresh London zone. Click Auto again for another, or drag points to reshape.");
+    return;
+  }
+
+  // Extremely unlikely fallback if sampling never lands inside the ring.
+  loadDemoZone();
 }
 
 function fitToZone(options = {}) {
@@ -3524,6 +3621,7 @@ return {
   setTheme,
   setAllowWater,
   loadDemo: () => loadDemoZone(true),
+  autoZone: loadAutoZone,
   clearZone,
   undo: undoVertex,
   fit: fitToZone,
