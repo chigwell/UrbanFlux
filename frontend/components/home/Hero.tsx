@@ -25,21 +25,27 @@ export function Hero() {
           <Button
             asChild
             size="lg"
-            className="h-11 rounded-none p-4 shadow-lg shadow-primary/20"
+            className="group h-11 rounded-none p-4 shadow-lg shadow-primary/20"
           >
             <Link href="/app">
               Launch the tool
-              <ArrowRightIcon data-icon="inline-end" />
+              <ArrowRightIcon
+                data-icon="inline-end"
+                className="transition-transform duration-200 ease-out motion-safe:group-hover:translate-x-1"
+              />
             </Link>
           </Button>
           <Button
             asChild
             size="lg"
             variant="outline"
-            className="h-11 rounded-none p-4 bg-background/50 backdrop-blur"
+            className="group h-11 rounded-none p-4 bg-background/50 backdrop-blur"
           >
             <a href="https://github.com/chigwell/UrbanFlux">
-              <StarIcon data-icon="inline-start" />
+              <StarIcon
+                data-icon="inline-start"
+                className="transition-colors duration-100 group-hover:fill-yellow-400 group-hover:text-yellow-400"
+              />
               Star on GitHub
             </a>
           </Button>
