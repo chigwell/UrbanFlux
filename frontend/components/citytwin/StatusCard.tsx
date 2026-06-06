@@ -18,8 +18,8 @@ export function StatusCard({ progress, status, pills }: StatusCardProps) {
         <div className="flex items-center justify-between gap-2 text-sm">
           <span className="flex items-center gap-2 text-muted-foreground">
             <span className="relative flex size-2">
-              <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-60" />
-              <span className="relative inline-flex size-2 rounded-full bg-primary" />
+              <span className="absolute inline-flex size-full animate-ping rounded-full bg-green-600 dark:bg-green-400 opacity-60" />
+              <span className="relative inline-flex size-2 rounded-full bg-green-600 dark:bg-green-400" />
             </span>
             Live engine
           </span>
