@@ -1,21 +1,15 @@
 import { SiteHeader } from "@/components/marketing/SiteHeader";
 import { Hero } from "@/components/marketing/Hero";
-import { FeatureGrid } from "@/components/marketing/FeatureGrid";
-import { HowItWorks } from "@/components/marketing/HowItWorks";
-import { CtaBand } from "@/components/marketing/CtaBand";
-import { SiteFooter } from "@/components/marketing/SiteFooter";
 
 export default function HomePage() {
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div className="uf-page-bg relative flex min-h-dvh flex-col overflow-hidden">
+      <div className="uf-grid-bg pointer-events-none absolute inset-x-0 top-0 h-168 opacity-60" />
+      <div className="uf-noise pointer-events-none absolute inset-0 opacity-[0.025] mix-blend-overlay" />
       <SiteHeader />
-      <main className="flex-1">
+      <main className="relative flex-1">
         <Hero />
-        <FeatureGrid />
-        <HowItWorks />
-        <CtaBand />
       </main>
-      <SiteFooter />
     </div>
   );
 }

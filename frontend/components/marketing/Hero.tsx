@@ -1,58 +1,82 @@
 import Link from "next/link";
-import { ArrowRightIcon, MapPinnedIcon } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { ArrowRightIcon, StarIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { HeroMap } from "./HeroMap";
 
 export function Hero() {
   return (
-    <section className="mx-auto grid w-full max-w-6xl items-center gap-10 px-6 py-16 lg:grid-cols-2 lg:py-24">
-      <div className="flex flex-col items-start gap-6">
-        <Badge variant="secondary" className="gap-1.5">
-          <MapPinnedIcon className="size-3.5" />
-          Live London CityTwin
-        </Badge>
-        <h1 className="text-4xl font-semibold tracking-tight text-balance sm:text-5xl lg:text-6xl">
-          Draw a zone. Watch a city plan itself.
+    <section className="relative flex min-h-[calc(100dvh-4rem)] flex-col items-center overflow-hidden px-6 pt-16 sm:pt-20">
+      <div
+        className="uf-enter flex max-w-3xl flex-col items-center text-center"
+        style={{ animationDelay: "40ms" }}
+      >
+        <h1 className="mt-7 text-5xl font-semibold leading-[0.95] tracking-tighter text-balance sm:text-6xl lg:text-7xl">
+          Redraw a city block,
+          <span className="uf-accent-text block">watch it replan itself.</span>
         </h1>
-        <p className="max-w-prose text-lg text-muted-foreground text-pretty">
-          UrbanFlux turns any boundary you draw over London into a water-aware
-          regeneration plan — roads snapped to real OpenStreetMap geometry,
-          generated buildings, green space, and live impact metrics.
+
+        <p className="mt-6 max-w-xl text-lg leading-8 text-muted-foreground text-pretty">
+          Draw any boundary over London and UrbanFlux generates a water-aware
+          regeneration plan — roads, buildings, green space and live impact
+          metrics. Entirely in your browser.
         </p>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button asChild size="lg">
+
+        <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+          <Button
+            asChild
+            size="lg"
+            className="h-11 rounded-none p-4 shadow-lg shadow-primary/20"
+          >
             <Link href="/app">
               Launch the tool
               <ArrowRightIcon data-icon="inline-end" />
             </Link>
           </Button>
-          <Button asChild size="lg" variant="outline">
-            <a href="#how">See how it works</a>
+          <Button
+            asChild
+            size="lg"
+            variant="outline"
+            className="h-11 rounded-none p-4 bg-background/50 backdrop-blur"
+          >
+            <a href="https://github.com/chigwell/UrbanFlux">
+              <StarIcon data-icon="inline-start" />
+              Star on GitHub
+            </a>
           </Button>
         </div>
-        <dl className="flex flex-wrap gap-x-8 gap-y-3 pt-4 text-sm">
-          <div>
-            <dt className="text-muted-foreground">Data source</dt>
-            <dd className="font-medium">Live OSM + vector tiles</dd>
-          </div>
-          <div>
-            <dt className="text-muted-foreground">Runs</dt>
-            <dd className="font-medium">Entirely in your browser</dd>
-          </div>
-          <div>
-            <dt className="text-muted-foreground">Replans in</dt>
-            <dd className="font-medium">Real time</dd>
-          </div>
-        </dl>
       </div>
+      <div
+        className="uf-enter relative mt-14 w-full max-w-5xl"
+        style={{ animationDelay: "160ms" }}
+      >
+        <div className="pointer-events-none absolute -inset-x-10 -top-16 bottom-0 bg-[radial-gradient(60%_60%_at_50%_0%,color-mix(in_oklch,var(--uf-accent)_28%,transparent),transparent_70%)] blur-2xl" />
+        <div className="uf-map-frame relative aspect-16/10 overflow-hidden rounded-t-[1.75rem] border border-foreground/10 bg-card/40 sm:aspect-video">
+          <HeroMap />
+          <div className="pointer-events-none absolute inset-3 rounded-[1.35rem] border border-white/10" />
 
-      <div className="relative aspect-[4/3] overflow-hidden rounded-2xl border shadow-2xl lg:aspect-square">
-        <HeroMap />
-        <div className="absolute bottom-4 left-4 rounded-xl border bg-card/85 px-4 py-3 backdrop-blur">
-          <p className="text-xs text-muted-foreground">Generated scenario</p>
-          <p className="text-lg font-semibold tabular-nums">1,240 homes · 4.2 ha green</p>
+          <div className="absolute left-4 top-4 flex items-center gap-2 rounded-full border border-white/15 bg-black/35 px-3 py-1.5 text-xs font-medium text-white shadow-sm backdrop-blur">
+            <span className="relative flex size-2">
+              <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-70" />
+              <span className="relative inline-flex size-2 rounded-full bg-emerald-400" />
+            </span>
+            Planning engine live
+          </div>
+
+          <div className="uf-float uf-glass absolute bottom-5 left-5 rounded-2xl p-4">
+            <p className="text-xs uppercase tracking-widest text-muted-foreground">
+              Generated scenario
+            </p>
+            <div className="mt-1.5 flex items-end gap-3">
+              <p className="text-2xl font-semibold tracking-tight tabular-nums">
+                1,240
+              </p>
+              <p className="pb-0.5 text-sm text-muted-foreground">
+                homes · 4.2 ha green
+              </p>
+            </div>
+          </div>
         </div>
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-linear-to-t from-background to-transparent" />
       </div>
     </section>
   );

@@ -24,18 +24,20 @@ export function DashboardCard({ scenario, metrics, report }: DashboardCardProps)
   return (
     <CollapsiblePanel title="Impact dashboard" meta={scenario}>
       <div className="flex flex-col gap-4">
-        <div className="grid grid-cols-3 gap-2">
+        <p className="text-sm leading-relaxed text-muted-foreground">{report}</p>
+        <div className="grid grid-cols-2 gap-2">
           {tiles.map((tile) => (
             <div
               key={tile.label}
-              className="flex flex-col gap-1 rounded-lg border bg-background/40 p-2.5"
+              className=" border-[0.5px] bg-muted/30 p-3"
             >
               <span className="text-xs text-muted-foreground">{tile.label}</span>
-              <span className="text-base font-semibold tabular-nums">{tile.value}</span>
+              <span className="mt-1 block text-base font-medium tabular-nums">
+                {tile.value}
+              </span>
             </div>
           ))}
         </div>
-        <p className="text-xs leading-relaxed text-muted-foreground">{report}</p>
       </div>
     </CollapsiblePanel>
   );
