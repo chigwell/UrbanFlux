@@ -167,16 +167,10 @@ export function CityTwinApp() {
 
       {/* Mobile: a floating Home button + a single draggable bottom sheet. */}
       <div className="absolute left-3 top-3 z-30 md:hidden">{homeButton}</div>
-
       <BottomSheet
         peek={
           <div className="flex items-center justify-between gap-2">
             <span className="text-sm font-medium">Controls &amp; insights</span>
-            <span className="truncate text-xs text-muted-foreground">
-              {population?.status === "ready"
-                ? `${population.population} people`
-                : scenario}
-            </span>
           </div>
         }
       >
