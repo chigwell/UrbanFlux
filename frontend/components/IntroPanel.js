@@ -1,14 +1,14 @@
 export default function IntroPanel() {
   return (
-    <details className="panel intro" id="introPanel" open>
+    <details className="hero glass accordion-card intro-card" id="introPanel">
       <summary>
-        <span className="summary-title">CityTwin demo</span>
-        <span className="summary-meta">London</span>
+        <span className="accordion-summary-title">CityTwin demo</span>
+        <span className="accordion-summary-meta">intro</span>
       </summary>
-      <div className="panel-body">
-        <div className="badges">
+      <div className="accordion-body intro-body">
+        <div className="badge-row">
           <span className="badge">NVIDIA Hackathon Concept</span>
-          <span className="badge">OSM + OpenFreeMap</span>
+          <span className="badge">London Open Data + OSM</span>
           <span className="badge">Live CityTwin</span>
         </div>
         <h1>
@@ -17,8 +17,9 @@ export default function IntroPanel() {
           Watch London redesign itself.
         </h1>
         <p className="subtitle">
-          Select a 4+ point polygon. The demo reads nearby roads, buildings, parks and water,
-          protects water by default and rebuilds the neighbourhood as you drag points or tune sliders.
+          Select a 4+ point polygon. The demo fetches nearby road, building, park and water geometry,
+          snaps generated streets to real boundary roads, protects water by default and rebuilds the
+          neighbourhood as you drag every point.
         </p>
       </div>
     </details>

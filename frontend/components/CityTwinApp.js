@@ -14,7 +14,7 @@ export default function CityTwinApp() {
   return (
     <>
       <div id="map" />
-      <div className="map-grid" />
+      <div className="grid-noise" />
 
       <main className="shell">
         <section className="topbar">
@@ -29,7 +29,7 @@ export default function CityTwinApp() {
         </section>
 
         <div className="map-hint" id="mapHint">
-          Click at least four points. Drag cyan vertices. White handles add points.
+          Click at least four points. Drag cyan vertices. White handles add new points.
         </div>
         <div className="toast" id="toast" />
       </main>

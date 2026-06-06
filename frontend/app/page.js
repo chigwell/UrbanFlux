@@ -1,5 +1,5 @@
 import CityTwinApp from "../components/CityTwinApp";
 
-export default function Home() {
+export default function Page() {
   return <CityTwinApp />;
 }

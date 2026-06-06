@@ -9,12 +9,12 @@ const sliders = [
 
 export default function ControlsPanel() {
   return (
-    <details className="panel" id="controlsPanel" open>
+    <details className="controls panel glass accordion-card" id="controlsPanel">
       <summary>
-        <span className="summary-title">Urban controls</span>
-        <span className="summary-meta">scenario</span>
+        <span className="accordion-summary-title">Urban controls</span>
+        <span className="accordion-summary-meta">closed</span>
       </summary>
-      <div className="panel-body">
+      <div className="accordion-body">
         <div className="button-row">
           <button className="btn primary" id="demoButton" type="button">
             Demo

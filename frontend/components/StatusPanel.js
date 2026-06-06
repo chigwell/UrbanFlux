@@ -1,11 +1,11 @@
 export default function StatusPanel() {
   return (
-    <details className="panel" id="statusPanel" open>
+    <details className="status-card glass accordion-card status-panel" id="statusPanel">
       <summary>
-        <span className="summary-title">Planning engine</span>
-        <span className="summary-meta">live</span>
+        <span className="accordion-summary-title">Planning engine</span>
+        <span className="accordion-summary-meta">live</span>
       </summary>
-      <div className="panel-body">
+      <div className="accordion-body">
         <div className="status-head">
           <span>Planning engine</span>
           <span className="pulse" />

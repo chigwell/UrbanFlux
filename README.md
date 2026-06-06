@@ -1,17 +1,17 @@
 # UrbanFlux
 
-UrbanFlux has a Next.js frontend and a FastAPI backend.
+UrbanFlux has a Next.js CityTwin frontend and a FastAPI backend.
 
 ## Live URLs
 
-- Frontend: https://urbanflux.pages.dev/
+- Frontend: https://urbanflux.london/
 - Backend: http://161.97.187.158/
 
 ## Project structure
 
 ```text
 backend/    FastAPI app
-frontend/   Next.js app
+frontend/   Next.js CityTwin map app
 .github/    GitHub Actions deploy workflow
 ```
 
@@ -35,11 +35,7 @@ npm install
 npm run dev
 ```
 
-The frontend expects the API at `http://127.0.0.1:8000` by default. Override it with:
-
-```bash
-export NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
-```
+The frontend is a static MapLibre SPA. It uses OpenFreeMap tiles and Overpass API from the browser.
 
 ## Deployment
 
