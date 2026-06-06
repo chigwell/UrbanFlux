@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { ArrowRightIcon, StarIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -50,14 +51,14 @@ export function Hero() {
         style={{ animationDelay: "160ms" }}
       >
         <div className="overflow-hidden rounded-xl border border-foreground/10 bg-card shadow-sm ring-1 ring-foreground/10">
-          <img
+          <Image
             src="/urbanflux-demo.png"
             alt="UrbanFlux CityTwin demo with generated buildings, roads, and planning controls over London"
             width={3456}
             height={1940}
             className="block h-auto w-full"
-            loading="eager"
-            decoding="async"
+            priority
+            unoptimized
           />
         </div>
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-linear-to-t from-background to-transparent" />
