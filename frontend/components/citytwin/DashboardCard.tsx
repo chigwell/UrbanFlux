@@ -71,6 +71,15 @@ function metricSign(
   return "neutral";
 }
 
+function sourceLabel(source: string) {
+  try {
+    const url = new URL(source);
+    return `${url.hostname.replace(/^www\./, "")}${url.pathname.replace(/\/$/, "")}`;
+  } catch {
+    return source;
+  }
+}
+
 function ImpactMetrics({ impact }: { impact: CityTwinImpact | null }) {
   const message =
     !impact || impact.status === "ready"
@@ -126,9 +135,10 @@ function ImpactMetrics({ impact }: { impact: CityTwinImpact | null }) {
                         href={metric.source}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-xs underline underline-offset-2 hover:text-foreground"
+                        title={metric.source}
+                        className="max-w-[55%] truncate text-right text-xs underline underline-offset-2 hover:text-foreground"
                       >
-                        Source
+                        {sourceLabel(metric.source)}
                       </a>
                     ) : null}
                   </div>
@@ -136,9 +146,9 @@ function ImpactMetrics({ impact }: { impact: CityTwinImpact | null }) {
               );
             })}
           </div>
-          {/* {impact.note ? (
+          {impact.note ? (
             <p className="text-xs text-muted-foreground">{impact.note}</p>
-          ) : null} */}
+          ) : null}
         </>
       ) : (
         <p className="text-sm text-muted-foreground">

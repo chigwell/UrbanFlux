@@ -96,6 +96,41 @@ def test_default_heat_metric_is_local_and_capped() -> None:
     assert heat_metric.delta == "-0.32 °C local heat proxy vs low-greening scenario"
 
 
+def test_impact_metrics_change_with_replanning_params() -> None:
+    low = main._compute_impact_metrics(
+        2480,
+        0.42,
+        main.ReplanningParams(
+            housing_density=10,
+            green_space_target=5,
+            parking_pressure=80,
+            road_fill=5,
+            road_alignment=0,
+            height_ambition=0,
+        ),
+    )
+    high = main._compute_impact_metrics(
+        2480,
+        0.42,
+        main.ReplanningParams(
+            housing_density=100,
+            green_space_target=80,
+            parking_pressure=0,
+            road_fill=100,
+            road_alignment=100,
+            height_ambition=100,
+        ),
+    )
+
+    low_by_name = {metric.improved_metric: metric.improved_value for metric in low}
+    high_by_name = {metric.improved_metric: metric.improved_value for metric in high}
+
+    assert low_by_name["Cycling mode share"] != high_by_name["Cycling mode share"]
+    assert low_by_name["Housing capacity"] != high_by_name["Housing capacity"]
+    assert low_by_name["Local summer heat exposure"] != high_by_name["Local summer heat exposure"]
+    assert low_by_name["Productive land released from parking"] != high_by_name["Productive land released from parking"]
+
+
 def test_nemotron_prompt_restricts_sources_and_weather_claims() -> None:
     prompt = main.NEMOTRON_IMPACT_SYSTEM_PROMPT
 

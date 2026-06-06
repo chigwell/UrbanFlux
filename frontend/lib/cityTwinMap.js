@@ -2833,7 +2833,6 @@ out body geom qt;
     const green = settings.green / 100;
     const parking = settings.parking / 100;
     const street = settings.street / 100;
-    const height = settings.height / 100;
     const waterInsideArea = estimateWaterAreaInside(
       stats.waterObstacles,
       selectedPolygon,
@@ -2888,12 +2887,7 @@ out body geom qt;
       ? features
       : filterGeneratedFeaturesAgainstWater(features, frame, obstacles);
     const featureSummary = summariseGeneratedFeatures(protectedFeatures);
-    const homes = Math.round(
-      (featureSummary.buildingFloorArea *
-        (1.15 + density * 2.2) *
-        (0.72 + height * 0.8)) /
-        74,
-    );
+    const homes = estimateHomesCapacity(featureSummary, settings);
     const parkingSpaces = Math.round(featureSummary.parkingArea / 18);
 
     return {
@@ -2962,6 +2956,7 @@ out body geom qt;
     const roadConnectionIds = new Set();
     const summary = {
       buildingCount: 0,
+      buildingFootprintArea: 0,
       buildingFloorArea: 0,
       parkingArea: 0,
       greenArea: 0,
@@ -2976,6 +2971,7 @@ out body geom qt;
         const footprintArea = Number(feature.properties.footprintArea || 0);
         const levels = Number(feature.properties.levels || 1);
         summary.buildingCount += 1;
+        summary.buildingFootprintArea += footprintArea;
         summary.buildingFloorArea += footprintArea * Math.max(levels, 1);
       } else if (kind === "parking") {
         summary.parkingArea += Number(feature.properties.area || 0);
@@ -3002,6 +2998,32 @@ out body geom qt;
       }
     }
     return summary;
+  }
+
+  function estimateHomesCapacity(featureSummary, settings) {
+    if (featureSummary.buildingCount <= 0) {
+      return 0;
+    }
+
+    const homesPerBlock = clamp(Number(settings.density) || 0, 5, 100);
+    const heightAmbition = clamp(Number(settings.height ?? 58) / 100, 0, 1);
+    const averageLevels =
+      featureSummary.buildingFootprintArea > 0
+        ? featureSummary.buildingFloorArea / featureSummary.buildingFootprintArea
+        : 1;
+    const heightMultiplier = clamp(0.75 + heightAmbition * 1.15, 0.75, 1.9);
+    const towerMultiplier = clamp(
+      0.85 + Math.log2(Math.max(averageLevels, 1)) / 5,
+      0.85,
+      2.1,
+    );
+
+    return Math.round(
+      featureSummary.buildingCount *
+        homesPerBlock *
+        heightMultiplier *
+        towerMultiplier,
+    );
   }
 
   function prepareAnchors(anchors, localPolygon, centroid, settings) {
