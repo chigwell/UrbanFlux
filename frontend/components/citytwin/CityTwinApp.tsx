@@ -4,8 +4,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
-import { ArrowLeftIcon, SparklesIcon } from "lucide-react";
+import { ArrowLeftIcon, MoonIcon, SparklesIcon, SunIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import type {
   AutoImprovementMode,
   CityTwinHandle,
@@ -343,13 +345,31 @@ export function CityTwinApp() {
   };
 
   const homeButton = (
-    <div className="flex w-fit items-center justify-between gap-2 border-[0.5px] bg-card px-3 py-2 shadow-sm">
-      <Button asChild size="sm" variant="ghost">
-        <Link href="/" className="hover:bg-transparent">
-          <ArrowLeftIcon data-icon="inline-start" />
-          Home
-        </Link>
-      </Button>
+    <div className="flex w-fit items-stretch gap-2 border-[0.5px] bg-card px-3 py-2 shadow-sm">
+      <div className="flex items-center">
+        <Button asChild size="sm" variant="ghost">
+          <Link href="/" className="hover:bg-transparent">
+            <ArrowLeftIcon data-icon="inline-start" />
+            Home
+          </Link>
+        </Button>
+      </div>
+      <Separator orientation="vertical" />
+      <div className="flex items-center gap-2 text-sm font-medium">
+        {isDark ? (
+          <MoonIcon className="size-4" aria-hidden />
+        ) : (
+          <SunIcon className="size-4" aria-hidden />
+        )}
+        <span className="hidden sm:inline">
+          {isDark ? "Dark" : "Light"} basemap
+        </span>
+        <Switch
+          checked={isDark}
+          onCheckedChange={handleToggleTheme}
+          aria-label="Toggle basemap theme"
+        />
+      </div>
     </div>
   );
 
@@ -357,7 +377,6 @@ export function CityTwinApp() {
     <ControlsCard
       settings={settings}
       allowWater={allowWater}
-      isDark={isDark}
       autoRunning={autoRunning}
       autoMode={autoMode}
       controlsOpen={controlsOpen}
@@ -367,7 +386,6 @@ export function CityTwinApp() {
       onRestartAutoImprovement={restartAutoImprovement}
       onSetting={handleSetting}
       onAllowWater={handleAllowWater}
-      onToggleTheme={handleToggleTheme}
       onDemo={() => runManualAction(() => handleRef.current?.loadDemo())}
       onUndo={() => runManualAction(() => handleRef.current?.undo())}
       onClear={() => runManualAction(() => handleRef.current?.clearZone())}
