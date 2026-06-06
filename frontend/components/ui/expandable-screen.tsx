@@ -9,7 +9,6 @@ import {
 } from "react"
 import { createPortal } from "react-dom"
 import { X } from "lucide-react"
-import { AnimatePresence, motion } from "motion/react"
 
 // Context
 interface ExpandableScreenContextValue {
@@ -19,7 +18,6 @@ interface ExpandableScreenContextValue {
   layoutId: string
   triggerRadius: string
   contentRadius: string
-  animationDuration: number
 }
 
 const ExpandableScreenContext =
@@ -101,9 +99,8 @@ export function ExpandableScreen({
         layoutId,
         triggerRadius,
         contentRadius,
-        animationDuration,
-      }}
-    >
+    }}
+  >
       {children}
     </ExpandableScreenContext.Provider>
   )
@@ -122,33 +119,21 @@ export function ExpandableScreenTrigger({
   const { isExpanded, expand, layoutId, triggerRadius } = useExpandableScreen()
 
   return (
-    <AnimatePresence initial={false}>
-      {!isExpanded && (
-        <motion.div className={`relative block w-full min-w-0 ${className}`}>
-          {/* Background layer with shared layoutId for morphing */}
-          <motion.div
-            style={{
-              borderRadius: triggerRadius,
-            }}
-            layout
-            layoutId={layoutId}
-            className="absolute inset-0 overflow-hidden transform-gpu will-change-transform"
-          />
-          {/* Content layer that fades out on expand */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: 0.2 }}
-            exit={{ opacity: 0, scale: 0.8 }}
-            layout={false}
-            onClick={expand}
-            className="relative min-w-0 cursor-pointer overflow-hidden"
-          >
-            {children}
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    !isExpanded ? (
+      <div className={`relative block w-full min-w-0 ${className}`}>
+        <div
+          style={{ borderRadius: triggerRadius }}
+          className="absolute inset-0 overflow-hidden transform-gpu will-change-transform"
+          data-layout-id={layoutId}
+        />
+        <div
+          onClick={expand}
+          className="relative min-w-0 cursor-pointer overflow-hidden"
+        >
+          {children}
+        </div>
+      </div>
+    ) : null
   )
 }
 
@@ -166,8 +151,7 @@ export function ExpandableScreenContent({
   showCloseButton = true,
   closeButtonClassName = "",
 }: ExpandableScreenContentProps) {
-  const { isExpanded, collapse, layoutId, contentRadius, animationDuration } =
-    useExpandableScreen()
+  const { isExpanded, collapse, layoutId, contentRadius } = useExpandableScreen()
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
@@ -179,48 +163,35 @@ export function ExpandableScreenContent({
   }
 
   return createPortal(
-    <AnimatePresence initial={false}>
-      {isExpanded && (
-        <motion.div
-          key="expandable-screen"
-          className="fixed inset-0 z-200 flex items-center justify-center p-3 sm:p-2"
+    isExpanded ? (
+      <div
+        key="expandable-screen"
+        className="fixed inset-0 z-200 flex items-center justify-center p-3 sm:p-2"
+      >
+        <div
+          data-layout-id={layoutId}
+          style={{ borderRadius: contentRadius }}
+          className={`relative flex h-full w-full overflow-hidden transform-gpu will-change-transform ${className}`}
         >
-          <motion.div
-            layoutId={layoutId}
-            transition={{ duration: animationDuration }}
-            style={{ borderRadius: contentRadius }}
-            className={`relative flex h-full w-full overflow-hidden transform-gpu will-change-transform ${className}`}
-          >
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0, transition: { duration: 0.08, delay: 0 } }}
-              transition={{ delay: 0.15, duration: 0.25 }}
-              className="relative z-20 h-full w-full min-w-0 overflow-x-hidden overflow-y-auto"
-            >
-              {children}
-            </motion.div>
-          </motion.div>
+          <div className="relative z-20 h-full w-full min-w-0 overflow-x-hidden overflow-y-auto">
+            {children}
+          </div>
+        </div>
 
-          {showCloseButton && (
-            <motion.button
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ delay: 0.15, duration: 0.15 }}
-              onClick={collapse}
-              className={`absolute right-8 top-8 z-30 flex h-10 w-10 items-center justify-center rounded-full transition-colors sm:right-6 sm:top-6 ${
-                closeButtonClassName ||
-                "text-primary-foreground bg-transparent hover:bg-primary-foreground/10"
-              }`}
-              aria-label="Close"
-            >
-              <X className="h-5 w-5" />
-            </motion.button>
-          )}
-        </motion.div>
-      )}
-    </AnimatePresence>,
+        {showCloseButton && (
+          <button
+            onClick={collapse}
+            className={`absolute right-8 top-8 z-30 flex h-10 w-10 items-center justify-center rounded-full transition-colors sm:right-6 sm:top-6 ${
+              closeButtonClassName ||
+              "text-primary-foreground bg-transparent hover:bg-primary-foreground/10"
+            }`}
+            aria-label="Close"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        )}
+      </div>
+    ) : null,
     document.body,
   )
 }

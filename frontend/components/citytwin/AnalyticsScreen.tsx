@@ -192,6 +192,9 @@ export function AnalyticsScreen({
           <section className="flex flex-col gap-3">
             <h3 className="text-sm font-medium">Metric detail</h3>
             <ImpactMetricCards impact={impact} />
+            {impact?.note ? (
+              <p className="text-xs text-muted-foreground">{impact.note}</p>
+            ) : null}
           </section>
         </div>
       </ExpandableScreenContent>

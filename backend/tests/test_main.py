@@ -61,8 +61,42 @@ def test_population_endpoint_returns_selected_area_population(monkeypatch) -> No
 
 def test_impact_endpoint_returns_replanning_metrics(monkeypatch) -> None:
     monkeypatch.setattr(main, "_population_in_polygon", lambda geom: (2480, 5))
-    monkeypatch.setattr(main, "_fetch_borough_rows", lambda lat, lon: ("Borough: Westminster", set()))
     monkeypatch.setattr(main, "_validate_metric_sources", lambda metrics, allowed_sources: metrics)
+    transport_source = "https://data.london.gov.uk/dataset/transport-data/"
+    housing_source = "https://data.london.gov.uk/dataset/housing-data/"
+    planning_source = "https://data.london.gov.uk/dataset/planning-data/"
+    socioeconomic_source = "https://data.london.gov.uk/dataset/socioeconomic-data/"
+    monkeypatch.setattr(
+        main,
+        "_fetch_borough_context",
+        lambda lat, lon: (
+            "Westminster",
+            {
+                "transport": {
+                    "theme": "transport",
+                    "dataset_title": "Transport data",
+                    "source_url": transport_source,
+                },
+                "housing": {
+                    "theme": "housing",
+                    "dataset_title": "Housing data",
+                    "source_url": housing_source,
+                },
+                "planning_land": {
+                    "theme": "planning_land",
+                    "dataset_title": "Planning data",
+                    "source_url": planning_source,
+                },
+                "socioeconomic": {
+                    "theme": "socioeconomic",
+                    "dataset_title": "Socioeconomic data",
+                    "source_url": socioeconomic_source,
+                },
+            },
+            "Borough: Westminster",
+            {transport_source, housing_source, planning_source, socioeconomic_source},
+        ),
+    )
 
     response = client.post(
         "/impact",
@@ -85,7 +119,10 @@ def test_impact_endpoint_returns_replanning_metrics(monkeypatch) -> None:
     assert payload["area_km2"] > 0
     assert len(payload["metrics"]) == 5
     assert payload["metrics"][0]["improved_metric"] == "Cycling mode share"
-    assert payload["note"] == "Benchmark estimates for Westminster"
+    assert payload["metrics"][0]["source"] == transport_source
+    assert payload["metrics"][0]["methodology_source"] == main._METHODOLOGY_TFL_STREETS
+    assert "Mapped Westminster transport row" in payload["metrics"][0]["basis"]
+    assert payload["note"] == "London Datastore mapped estimates for Westminster"
 
 
 def test_default_heat_metric_is_local_and_capped() -> None:
@@ -96,10 +133,88 @@ def test_default_heat_metric_is_local_and_capped() -> None:
     assert heat_metric.delta == "-0.32 °C local heat proxy vs low-greening scenario"
 
 
+def test_impact_metrics_change_with_replanning_params() -> None:
+    low = main._compute_impact_metrics(
+        2480,
+        0.42,
+        main.ReplanningParams(
+            housing_density=10,
+            green_space_target=5,
+            parking_pressure=80,
+            road_fill=5,
+            road_alignment=0,
+            height_ambition=0,
+        ),
+    )
+    high = main._compute_impact_metrics(
+        2480,
+        0.42,
+        main.ReplanningParams(
+            housing_density=100,
+            green_space_target=80,
+            parking_pressure=0,
+            road_fill=100,
+            road_alignment=100,
+            height_ambition=100,
+        ),
+    )
+
+    low_by_name = {metric.improved_metric: metric.improved_value for metric in low}
+    high_by_name = {metric.improved_metric: metric.improved_value for metric in high}
+
+    assert low_by_name["Cycling mode share"] != high_by_name["Cycling mode share"]
+    assert low_by_name["Housing capacity"] != high_by_name["Housing capacity"]
+    assert low_by_name["Local summer heat exposure"] != high_by_name["Local summer heat exposure"]
+    assert low_by_name["Productive land released from parking"] != high_by_name["Productive land released from parking"]
+
+
+def test_impact_metrics_use_london_sources_not_external_methodology() -> None:
+    transport_source = "https://data.london.gov.uk/dataset/transport-data/"
+    housing_source = "https://data.london.gov.uk/dataset/housing-data/"
+    planning_source = "https://data.london.gov.uk/dataset/planning-data/"
+    socioeconomic_source = "https://data.london.gov.uk/dataset/socioeconomic-data/"
+
+    metrics = main._compute_impact_metrics(
+        2480,
+        0.42,
+        main.ReplanningParams(),
+        borough_name="Westminster",
+        rows_by_theme={
+            "transport": {"dataset_title": "Transport data", "source_url": transport_source},
+            "housing": {"dataset_title": "Housing data", "source_url": housing_source},
+            "planning_land": {"dataset_title": "Planning data", "source_url": planning_source},
+            "socioeconomic": {"dataset_title": "Socioeconomic data", "source_url": socioeconomic_source},
+        },
+    )
+
+    sources = {metric.source for metric in metrics}
+    methodology_sources = {metric.methodology_source for metric in metrics}
+
+    assert sources == {transport_source, housing_source, planning_source, socioeconomic_source}
+    assert main._METHODOLOGY_TFL_STREETS not in sources
+    assert main._METHODOLOGY_WHO_HEAT not in sources
+    assert main._METHODOLOGY_TFL_STREETS in methodology_sources
+    assert main._METHODOLOGY_WHO_HEAT in methodology_sources
+
+
+def test_missing_london_rows_leave_source_empty_with_benchmark_basis() -> None:
+    metrics = main._compute_impact_metrics(
+        2480,
+        0.42,
+        main.ReplanningParams(),
+        borough_name="Westminster",
+        rows_by_theme={},
+    )
+
+    assert all(metric.source == "" for metric in metrics)
+    assert all("Benchmark method only" in metric.basis for metric in metrics)
+
+
 def test_nemotron_prompt_restricts_sources_and_weather_claims() -> None:
     prompt = main.NEMOTRON_IMPACT_SYSTEM_PROMPT
 
-    assert "exactly one URL from the allowed source URLs list" in prompt
+    assert "exactly one London Datastore URL from the allowed source URLs list" in prompt
+    assert "must never appear in source" in prompt
     assert "Never describe it as citywide weather" in prompt
 
 
@@ -132,7 +247,7 @@ def test_validate_metric_sources_blanks_unlisted_source(monkeypatch) -> None:
     assert validated[0].source == ""
 
 
-def test_validate_metric_sources_blanks_dead_allowed_source(monkeypatch) -> None:
+def test_validate_metric_sources_preserves_allowed_source_without_live_check(monkeypatch) -> None:
     source = "https://data.london.gov.uk/dataset/example/"
     metric = main.ImpactMetric(
         improved_metric="Housing capacity",
@@ -140,11 +255,9 @@ def test_validate_metric_sources_blanks_dead_allowed_source(monkeypatch) -> None
         delta="+1% vs baseline",
         source=source,
     )
-    monkeypatch.setattr(main, "_source_url_is_live", lambda url: False)
-
     validated = main._validate_metric_sources([metric], {source})
 
-    assert validated[0].source == ""
+    assert validated[0].source == source
 
 
 def test_validate_metric_sources_skips_empty_source(monkeypatch) -> None:
