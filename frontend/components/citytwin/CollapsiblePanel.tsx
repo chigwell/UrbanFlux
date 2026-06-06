@@ -12,6 +12,8 @@ interface CollapsiblePanelProps {
   title: string;
   meta?: React.ReactNode;
   defaultOpen?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   className?: string;
   children: React.ReactNode;
 }
@@ -20,12 +22,16 @@ export function CollapsiblePanel({
   title,
   meta,
   defaultOpen = false,
+  open,
+  onOpenChange,
   className,
   children,
 }: CollapsiblePanelProps) {
   return (
     <Collapsible
-      defaultOpen={defaultOpen}
+      defaultOpen={open === undefined ? defaultOpen : undefined}
+      open={open}
+      onOpenChange={onOpenChange}
       className={cn("group bg-card text-card-foreground shadow-xs", className)}
     >
       <CollapsibleTrigger className="flex w-full min-h-11 cursor-pointer items-center justify-between gap-3 border-[0.5px] px-4 py-3 text-left transition-colors hover:bg-muted">

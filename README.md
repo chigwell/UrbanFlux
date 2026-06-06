@@ -79,11 +79,11 @@ Detailed notes:
 
 ### David
 
-- [ ] Update FastAPI with an endpoint that calculates approximate population from selected-area coordinates.
+- [x] Update FastAPI with an endpoint that calculates approximate population from selected-area coordinates.
   - Plamen sends polygon coordinates.
   - Eugene provides GeoJSON/data package support.
   - Backend returns approximate population.
-- [ ] Add an endpoint for replanning impact calculations.
+- [x] Add an endpoint for replanning impact calculations.
   - Plamen sends selected-area coordinates and replanning parameters.
   - Eugene provides area data and model/agent support.
   - Backend returns:
@@ -94,14 +94,16 @@ Detailed notes:
     "improved_metric": "name_of_some_metric",
     "improved_value": "some_number_or_string",
     "delta": "the delta with the previous",
-    "source": "london_portal_link_source"
+    "source": "london_portal_link_source",
+    "methodology_source": "optional_external_methodology_link",
+    "basis": "mapped data and selected-area basis"
   }
 ]
 ```
 
 ### Eugene
 
-- [ ] Prepare CSV/GeoJSON sources and borough mapping support.
+- [x] Prepare CSV/GeoJSON sources and borough mapping support.
   - Create a separate package/function that accepts coordinates and returns JSON suitable for David's backend.
 - [ ] Build the MCP server for LLM-driven selection/replanning actions.
 - [ ] Fine-tune or adapt models for calculating replanning impact.

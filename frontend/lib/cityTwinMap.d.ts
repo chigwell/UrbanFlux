@@ -14,6 +14,26 @@ export type CityTwinSettingKey =
 
 export type CityTwinSettings = Record<CityTwinSettingKey, number>;
 
+export type AutoImprovementMode =
+  | "idle"
+  | "overview"
+  | "selecting"
+  | "waiting-initial-plan"
+  | "tuning"
+  | "waiting-improved-plan"
+  | "orbiting";
+
+export interface AutoImprovementZoneOptions {
+  signal?: AbortSignal;
+  reveal?: boolean;
+}
+
+export interface WaitForPlanOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  minGeneratedFeatures?: number;
+}
+
 export interface ReplanningParams {
   housing_density: number;
   green_space_target: number;
@@ -110,6 +130,8 @@ export interface CityTwinOptions {
   onImpact?: (impact: CityTwinImpact | null) => void;
   /** Transient toast message. */
   onToast?: (text: string) => void;
+  /** Fired when direct map/marker/camera input should cancel guided auto mode. */
+  onAutoInterrupted?: () => void;
 }
 
 export interface CityTwinHandle {
@@ -117,8 +139,15 @@ export interface CityTwinHandle {
   setTheme: (theme: CityTwinTheme) => void;
   setAllowWater: (on: boolean) => void;
   loadDemo: () => void;
-  /** Pick a fresh, randomly placed zone inside the Greater London boundary. */
+  /** Compatibility alias for the previous random zone picker. */
   autoZone: () => void;
+  flyToLondonOverview: (options?: { signal?: AbortSignal }) => Promise<void>;
+  pickAutoImprovementZone: (
+    options?: AutoImprovementZoneOptions,
+  ) => Promise<void>;
+  waitForPlanRender: (options?: WaitForPlanOptions) => Promise<boolean>;
+  startAutoOrbit: (options?: { signal?: AbortSignal }) => void;
+  stopAutoOrbit: () => void;
   clearZone: () => void;
   undo: () => void;
   fit: () => void;

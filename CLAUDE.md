@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 UrbanFlux ("CityTwin") is a browser-side urban-regeneration map demo: the user draws a polygon over London, the app pulls live map context (roads, water, buildings, parks) and procedurally generates a road/building/green-space layout with impact metrics. It is two independent apps:
 
 - `frontend/` — Next.js static-export app (the real product), TypeScript + Tailwind v4 + shadcn/ui. Two routes: `/` is the marketing landing, `/app` is the interactive CityTwin tool.
-- `backend/` — FastAPI Hello-World API. **Not consumed by the frontend** today; deployed separately. The repo-root `main.py` is empty.
+- `backend/` — FastAPI API for status checks, selected-area population, replanning impact metrics, and mapped London borough data. The frontend calls `/population` and `/impact`; the backend is deployed separately.
 
 ## Commands
 
@@ -26,7 +26,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-There is **no test suite configured** in either app (TypeScript typechecking is the only static gate on the frontend). "Build passes" = `npx tsc --noEmit` + `npm run build` (frontend) and the server importing cleanly (backend). Don't claim tests pass — there are none to run.
+Backend tests live in `backend/tests` and CI runs `pytest tests` from the `backend/` directory on Python 3.12. Frontend typechecking/build gates remain `npx tsc --noEmit` and `npm run build`.
 
 ## Architecture
 
@@ -60,7 +60,10 @@ User edits polygon → debounced handlers → render. Two parallel debounced pat
 
 ### Backend & deployment
 
-- `backend/main.py`: FastAPI app, CORS open to `*`, routes `/` and `/hello`. That's the whole API.
+- `backend/main.py`: FastAPI route layer and public import surface. Implementation is split across `schemas.py`, `population.py`, `impact.py`, `borough_context.py`, and `nemotron_adapter.py`.
+- Public backend routes: `GET /`, `GET /hello`, `POST /population`, `POST /impact`, and `GET /borough-data-test`.
+- `/impact` computes deterministic London-data-first metrics first. Nemotron refinement is optional and falls back when `FAL_KEY` or `fal_client` is absent, the call times out, or the model returns invalid metric JSON.
+- `backend/nemotron.py` is a legacy manual script for recommendation-style experiments; it is not imported by the FastAPI server.
 - `.github/workflows/deploy.yml` runs on push to `main`:
   - Frontend → builds and deploys `frontend/out` to **Cloudflare Pages** (needs `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_PROJECT_NAME`).
   - Backend → rsyncs `backend/` to a VPS at `/opt/urbanflux/backend`, reinstalls deps, restarts the `urbanflux-backend` systemd service (needs `VPS_*` secrets; see `backend/README.md` for the exact systemd command and secret values).
