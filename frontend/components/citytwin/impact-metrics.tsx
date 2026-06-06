@@ -80,6 +80,15 @@ export function impactMessage(impact: CityTwinImpact | null): string | null {
     : "Impact estimate unavailable. Adjust the controls to try again.";
 }
 
+function sourceLabel(source: string) {
+  try {
+    const url = new URL(source);
+    return `${url.hostname.replace(/^www\./, "")}${url.pathname.replace(/\/$/, "")}`;
+  } catch {
+    return source;
+  }
+}
+
 export function ImpactMetricCards({
   impact,
   className,
@@ -134,14 +143,17 @@ export function ImpactMetricCards({
               <span className="text-xs text-muted-foreground">
                 {metric.delta}
               </span>
-              <a
-                href={metric.source}
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs underline underline-offset-2 hover:text-foreground"
-              >
-                Source
-              </a>
+              {metric.source ? (
+                <a
+                  href={metric.source}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={metric.source}
+                  className="max-w-[55%] truncate text-right text-xs underline underline-offset-2 hover:text-foreground"
+                >
+                  {sourceLabel(metric.source)}
+                </a>
+              ) : null}
             </div>
           </div>
         );
