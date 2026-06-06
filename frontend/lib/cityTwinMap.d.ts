@@ -66,6 +66,22 @@ export interface CityTwinPopulation {
   note?: string;
 }
 
+/** A single replanning impact metric returned by the backend `/impact` endpoint. */
+export interface CityTwinImpactMetric {
+  metric: string;
+  value: string;
+  delta: string;
+  /** London data-portal / benchmark URL backing the estimate. */
+  source: string;
+}
+
+/** Replanning impact for the selected area + chosen params, from the backend. */
+export interface CityTwinImpact {
+  status: "loading" | "ready" | "error";
+  metrics?: CityTwinImpactMetric[];
+  note?: string;
+}
+
 export interface CityTwinOptions {
   /** Element id string or the element itself for the MapLibre container. */
   container: string | HTMLElement;
@@ -86,6 +102,8 @@ export interface CityTwinOptions {
   onPills?: (pills: CityTwinPills) => void;
   /** Approximate population for the selected area; `null` clears it. */
   onPopulation?: (population: CityTwinPopulation | null) => void;
+  /** Replanning impact metrics for the selected area + params; `null` clears them. */
+  onImpact?: (impact: CityTwinImpact | null) => void;
   /** Transient toast message. */
   onToast?: (text: string) => void;
 }

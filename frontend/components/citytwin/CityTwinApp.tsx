@@ -8,6 +8,7 @@ import { ArrowLeftIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type {
   CityTwinHandle,
+  CityTwinImpact,
   CityTwinMetrics,
   CityTwinPills,
   CityTwinPopulation,
@@ -46,6 +47,7 @@ export function CityTwinApp() {
   });
   const [metrics, setMetrics] = useState<CityTwinMetrics | null>(null);
   const [population, setPopulation] = useState<CityTwinPopulation | null>(null);
+  const [impact, setImpact] = useState<CityTwinImpact | null>(null);
   const [scenario, setScenario] = useState("No scenario yet");
   const [report, setReport] = useState("Loading the demo zone…");
   const [hint, setHint] = useState(
@@ -73,6 +75,7 @@ export function CityTwinApp() {
         },
         onMetrics: setMetrics,
         onPopulation: setPopulation,
+        onImpact: setImpact,
         onScenario: setScenario,
         onReport: setReport,
         onHint: setHint,
@@ -138,7 +141,12 @@ export function CityTwinApp() {
         />
         <LegendCard />
         <PopulationCard population={population} />
-        <DashboardCard scenario={scenario} metrics={metrics} report={report} />
+        <DashboardCard
+          scenario={scenario}
+          metrics={metrics}
+          impact={impact}
+          report={report}
+        />
       </div>
 
       <div className="pointer-events-none absolute inset-x-0 bottom-5 z-10 flex justify-center px-4">
