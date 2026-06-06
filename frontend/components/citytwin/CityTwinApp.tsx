@@ -412,7 +412,10 @@ export function CityTwinApp() {
       <div className="absolute right-4 top-4 z-10 hidden max-h-[calc(100dvh-2rem)] w-[min(22rem,calc(100vw-2rem))] flex-col gap-2.5 overflow-y-auto pb-2 *:shrink-0 md:flex">
         {controlsCard}
         <LegendCard />
-        <PopulationCard population={population} />
+        <PopulationCard
+          population={population}
+          heightAmbition={settings.height}
+        />
         <DashboardCard
           scenario={scenario}
           metrics={metrics}
@@ -441,7 +444,10 @@ export function CityTwinApp() {
       >
         <div className="flex flex-col gap-2.5 py-1 *:shrink-0">
           {controlsCard}
-          <PopulationCard population={population} />
+          <PopulationCard
+            population={population}
+            heightAmbition={settings.height}
+          />
           <DashboardCard
             scenario={scenario}
             metrics={metrics}
