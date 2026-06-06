@@ -105,3 +105,7 @@ Detailed notes:
   - Create a separate package/function that accepts coordinates and returns JSON suitable for David's backend.
 - [ ] Build the MCP server for LLM-driven selection/replanning actions.
 - [ ] Fine-tune or adapt models for calculating replanning impact.
+
+
+![](assets/1.png)
+
