@@ -1430,10 +1430,15 @@ export function initCityTwinMap(options = {}) {
         throw new Error(`Impact request failed: ${response.status}`);
       }
       const data = await response.json();
+      console.info("[UrbanFlux] Impact calculation engine", {
+        engine: data.calculation_engine || "unknown",
+        note: data.note || "",
+      });
       state.impactKey = key;
       emit.onImpact({
         status: "ready",
         note: data.note,
+        calculationEngine: data.calculation_engine,
         metrics: (data.metrics || []).map((metric) => ({
           metric: metric.improved_metric,
           value: metric.improved_value,

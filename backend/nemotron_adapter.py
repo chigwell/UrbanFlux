@@ -142,7 +142,7 @@ def _nemotron_impact_metrics(
     borough_rows: str,
     borough_sources: set[str],
     call_nemotron: Callable[[str], list[ImpactMetric] | None] | None = None,
-) -> tuple[list[ImpactMetric], str]:
+) -> tuple[list[ImpactMetric], str, str]:
     """
     Try to get Nemotron-refined metrics within the timeout window.
     Falls back to London-data-first deterministic metrics if Nemotron is too
@@ -195,7 +195,7 @@ Return the refined JSON array of impact metrics."""
             if borough_name
             else "Refined by Nvidia Nemotron using London Datastore data"
         )
-        return nemotron_metrics, note
+        return nemotron_metrics, note, "nemotron"
 
     has_london_sources = any(_normalise_source_url(metric.source) for metric in london_metrics)
     if borough_name and has_london_sources:
@@ -204,4 +204,4 @@ Return the refined JSON array of impact metrics."""
         note = f"Benchmark-method estimates for {borough_name}; mapped rows unavailable"
     else:
         note = "Benchmark-method estimates; mapped borough data unavailable"
-    return _validate_metric_sources(london_metrics, allowed_sources), note
+    return _validate_metric_sources(london_metrics, allowed_sources), note, "deterministic_fallback"

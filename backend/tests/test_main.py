@@ -125,6 +125,7 @@ def test_impact_endpoint_returns_replanning_metrics(monkeypatch) -> None:
     assert payload["metrics"][0]["methodology_source"] == main._METHODOLOGY_TFL_STREETS
     assert "Mapped Westminster transport row" in payload["metrics"][0]["basis"]
     assert payload["note"] == "London Datastore mapped estimates for Westminster"
+    assert payload["calculation_engine"] == "deterministic_fallback"
 
 
 def test_default_heat_metric_is_local_and_capped() -> None:
@@ -401,7 +402,7 @@ def test_nemotron_impact_metrics_falls_back_when_unavailable(monkeypatch) -> Non
     ]
     monkeypatch.setattr(main, "_call_nemotron", lambda prompt: None)
 
-    metrics, note = main._nemotron_impact_metrics(
+    metrics, note, calculation_engine = main._nemotron_impact_metrics(
         population=2480,
         area_km2=0.42,
         params=main.ReplanningParams(),
@@ -413,6 +414,7 @@ def test_nemotron_impact_metrics_falls_back_when_unavailable(monkeypatch) -> Non
 
     assert metrics == london_metrics
     assert note == "London Datastore mapped estimates for Westminster"
+    assert calculation_engine == "deterministic_fallback"
 
 
 def test_nemotron_impact_metrics_blanks_unallowed_refined_sources(monkeypatch) -> None:
@@ -445,7 +447,7 @@ def test_nemotron_impact_metrics_blanks_unallowed_refined_sources(monkeypatch) -
         ],
     )
 
-    metrics, note = main._nemotron_impact_metrics(
+    metrics, note, calculation_engine = main._nemotron_impact_metrics(
         population=2480,
         area_km2=0.42,
         params=main.ReplanningParams(),
@@ -456,6 +458,7 @@ def test_nemotron_impact_metrics_blanks_unallowed_refined_sources(monkeypatch) -
     )
 
     assert note == "Refined by Nvidia Nemotron using real Westminster data"
+    assert calculation_engine == "nemotron"
     assert metrics[0].source == allowed_source
     assert metrics[1].source == ""
 

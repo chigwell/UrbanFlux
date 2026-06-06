@@ -132,6 +132,10 @@ class ImpactResponse(BaseModel):
     area_km2: float = Field(..., ge=0, description="Approximate selected area in square kilometres.")
     metrics: list[ImpactMetric] = Field(..., description="List of estimated impact metrics.")
     note: str = Field("Illustrative estimates - model integration in progress", description="Calculation note.")
+    calculation_engine: str = Field(
+        "deterministic_fallback",
+        description="Impact metric engine used: `nemotron` or `deterministic_fallback`.",
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -150,6 +154,7 @@ class ImpactResponse(BaseModel):
                         }
                     ],
                     "note": "Illustrative estimates - model integration in progress",
+                    "calculation_engine": "deterministic_fallback",
                 }
             ]
         }
