@@ -1,6 +1,14 @@
-# Frontend (Next.js CityTwin Map)
+# Frontend (Next.js CityTwin)
 
-Static single-page CityTwin map app. It uses MapLibre GL, OpenFreeMap tiles and Overpass API to let users draw a London polygon, inspect nearby urban context and generate an interactive regeneration scenario.
+Static-export Next.js (App Router) app, written in TypeScript and styled with
+Tailwind CSS v4 + shadcn/ui. It uses MapLibre GL, OpenFreeMap tiles and the
+Overpass API to let users draw a London polygon, inspect nearby urban context
+and generate an interactive regeneration scenario.
+
+## Routes
+
+- `/` — marketing landing page (shadcn, live MapLibre hero).
+- `/app` — the interactive CityTwin tool.
 
 ## Run locally
 
@@ -17,7 +25,17 @@ npm install
 npm run dev
 ```
 
-Then open: `http://localhost:3000`
+Then open: `http://localhost:3000` (landing) and `/app` (tool).
+
+## Architecture (tool)
+
+The geometry/generation engine lives in `lib/cityTwinMap.js` (framework-agnostic
+MapLibre + turf). It no longer touches the DOM by id: React mounts it once via
+`initCityTwinMap(options)`, which returns a **handle** (`setSetting`, `setTheme`,
+`setAllowWater`, `loadDemo`, `clearZone`, `undo`, `fit`, `destroy`) and emits
+output through callbacks (`onStatus`, `onMetrics`, `onScenario`, `onReport`,
+`onHint`, `onPills`, `onToast`). Types are in `lib/cityTwinMap.d.ts`. The shadcn
+controls in `components/citytwin/*` read React state and write through the handle.
 
 ## Main functionality
 
@@ -26,7 +44,7 @@ Then open: `http://localhost:3000`
 - Click-to-draw polygon editing
 - Draggable vertices and midpoint handles
 - Urban controls for density, green space, parking, roads, alignment and height
-- Light/dark basemap toggle
+- Light/dark basemap toggle (synced with the site theme via `next-themes`)
 - Water protection toggle
 - Overpass context for roads, water, buildings and parks
 - Generated roads, buildings, green space, parking and impact metrics

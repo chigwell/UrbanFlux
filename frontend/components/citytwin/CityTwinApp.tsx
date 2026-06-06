@@ -1,0 +1,150 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import { useTheme } from "next-themes";
+import { toast } from "sonner";
+import { ArrowLeftIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import type {
+  CityTwinHandle,
+  CityTwinMetrics,
+  CityTwinPills,
+  CityTwinSettingKey,
+  CityTwinSettings,
+} from "@/lib/cityTwinMap";
+import { ControlsCard } from "./ControlsCard";
+import { DashboardCard } from "./DashboardCard";
+import { IntroCard } from "./IntroCard";
+import { LegendCard } from "./LegendCard";
+import { StatusCard } from "./StatusCard";
+
+const DEFAULT_SETTINGS: CityTwinSettings = {
+  density: 64,
+  green: 35,
+  parking: 18,
+  street: 35,
+  alignment: 72,
+  height: 58,
+};
+
+export function CityTwinApp() {
+  const { resolvedTheme, setTheme } = useTheme();
+  const handleRef = useRef<CityTwinHandle | null>(null);
+
+  const [mounted, setMounted] = useState(false);
+  const [settings, setSettings] = useState<CityTwinSettings>(DEFAULT_SETTINGS);
+  const [allowWater, setAllowWater] = useState(false);
+  const [progress, setProgress] = useState(8);
+  const [status, setStatus] = useState("Booting the CityTwin engine…");
+  const [pills, setPills] = useState<CityTwinPills>({ roads: 0, water: 0, anchors: 0 });
+  const [metrics, setMetrics] = useState<CityTwinMetrics | null>(null);
+  const [scenario, setScenario] = useState("No scenario yet");
+  const [report, setReport] = useState("Loading the demo zone…");
+  const [hint, setHint] = useState("Click at least four points. Drag vertices to reshape.");
+
+  useEffect(() => setMounted(true), []);
+
+  // Mount the vanilla engine exactly once; lazy-load the heavy map bundle first.
+  useEffect(() => {
+    let cancelled = false;
+    const initialDark = document.documentElement.classList.contains("dark");
+
+    import("@/lib/cityTwinMap").then(({ initCityTwinMap }) => {
+      if (cancelled) {
+        return;
+      }
+      const handle = initCityTwinMap({
+        container: "map",
+        initialTheme: initialDark ? "dark" : "light",
+        initialAllowWater: false,
+        initialSettings: DEFAULT_SETTINGS,
+        onStatus: (value, text) => {
+          setProgress(value);
+          setStatus(text);
+        },
+        onMetrics: setMetrics,
+        onScenario: setScenario,
+        onReport: setReport,
+        onHint: setHint,
+        onPills: setPills,
+        onToast: (text) => toast(text),
+      });
+      handleRef.current = handle;
+    });
+
+    return () => {
+      cancelled = true;
+      handleRef.current?.destroy();
+      handleRef.current = null;
+    };
+  }, []);
+
+  const isDark = mounted ? resolvedTheme === "dark" : false;
+
+  const handleSetting = (key: CityTwinSettingKey, value: number) => {
+    setSettings((prev) => ({ ...prev, [key]: value }));
+    handleRef.current?.setSetting(key, value);
+  };
+
+  const handleAllowWater = (on: boolean) => {
+    setAllowWater(on);
+    handleRef.current?.setAllowWater(on);
+  };
+
+  const handleToggleTheme = (dark: boolean) => {
+    setTheme(dark ? "dark" : "light");
+    handleRef.current?.setTheme(dark ? "dark" : "light");
+  };
+
+  return (
+    <div className="relative h-dvh w-full overflow-hidden bg-background">
+      <div id="map" />
+
+      {/* Top-left: brand + live status */}
+      <div className="absolute left-4 top-4 z-10 flex w-[min(20rem,calc(100vw-2rem))] flex-col gap-3">
+        <div className="flex items-center justify-between gap-2 rounded-xl border bg-card/85 px-3 py-2 backdrop-blur">
+          <Link href="/" className="flex items-center gap-2 font-semibold">
+            <span className="grid size-7 place-items-center rounded-lg bg-primary text-primary-foreground">
+              UF
+            </span>
+            UrbanFlux
+          </Link>
+          <Button asChild size="sm" variant="ghost">
+            <Link href="/">
+              <ArrowLeftIcon data-icon="inline-start" />
+              Home
+            </Link>
+          </Button>
+        </div>
+        <IntroCard />
+        <StatusCard progress={progress} status={status} pills={pills} />
+      </div>
+
+      {/* Right: controls + legend + dashboard */}
+      <div className="absolute right-4 top-4 z-10 flex max-h-[calc(100dvh-2rem)] w-[min(22rem,calc(100vw-2rem))] flex-col gap-3 overflow-y-auto pb-2 *:shrink-0">
+        <ControlsCard
+          settings={settings}
+          allowWater={allowWater}
+          isDark={isDark}
+          onSetting={handleSetting}
+          onAllowWater={handleAllowWater}
+          onToggleTheme={handleToggleTheme}
+          onDemo={() => handleRef.current?.loadDemo()}
+          onUndo={() => handleRef.current?.undo()}
+          onClear={() => handleRef.current?.clearZone()}
+          onFit={() => handleRef.current?.fit()}
+        />
+        <LegendCard />
+        <DashboardCard scenario={scenario} metrics={metrics} report={report} />
+      </div>
+
+      {/* Bottom-center: contextual hint */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-5 z-10 flex justify-center px-4">
+        <p className="pointer-events-auto max-w-md rounded-full border bg-card/85 px-4 py-2 text-center text-xs text-muted-foreground backdrop-blur">
+          {hint}
+        </p>
+      </div>
+    </div>
+  );
+}

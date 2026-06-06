@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 UrbanFlux ("CityTwin") is a browser-side urban-regeneration map demo: the user draws a polygon over London, the app pulls live map context (roads, water, buildings, parks) and procedurally generates a road/building/green-space layout with impact metrics. It is two independent apps:
 
-- `frontend/` — Next.js static-export single-page app (the real product).
+- `frontend/` — Next.js static-export app (the real product), TypeScript + Tailwind v4 + shadcn/ui. Two routes: `/` is the marketing landing, `/app` is the interactive CityTwin tool.
 - `backend/` — FastAPI Hello-World API. **Not consumed by the frontend** today; deployed separately. The repo-root `main.py` is empty.
 
 ## Commands
@@ -26,19 +26,19 @@ pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-There is **no test suite, linter, or formatter configured** in either app. "Build passes" = `npm run build` (frontend) and the server importing cleanly (backend). Don't claim tests pass — there are none to run.
+There is **no test suite configured** in either app (TypeScript typechecking is the only static gate on the frontend). "Build passes" = `npx tsc --noEmit` + `npm run build` (frontend) and the server importing cleanly (backend). Don't claim tests pass — there are none to run.
 
 ## Architecture
 
-### Frontend: React shell + one imperative engine
+### Frontend: React + a bridged imperative engine
 
-The single most important thing to understand: **almost all logic lives in `frontend/lib/cityTwinMap.js` (~2900 lines of vanilla JS), not in the React components.**
+The geometry/generation engine still lives in `frontend/lib/cityTwinMap.js` (~2900 lines of framework-agnostic JS: MapLibre + turf). The heavy logic (context fetching, generation, MapLibre sources) is unchanged, **but the UI is no longer coupled by DOM `id`s** — it goes through a bridge:
 
-- `app/page.js` → `components/CityTwinApp.js` ("use client") renders **static markup with specific DOM `id`s** and calls `initCityTwinMap()` once in `useEffect`.
-- `cityTwinMap.js` is framework-agnostic. On init it grabs those elements via `document.getElementById(...)` (see the `dom` object at the top) and wires all event listeners, MapLibre map setup, fetching, generation, and rendering itself.
-- The panel components (`ControlsPanel`, `DashboardPanel`, `LegendPanel`, `StatusPanel`, `IntroPanel`) are **dumb markup only** — no handlers, no state. They exist to declare the DOM `id`s the engine reaches for.
+- `initCityTwinMap(options)` is called once from `components/citytwin/CityTwinApp.tsx` in a `useEffect`. It returns a **handle** — `setSetting`, `setTheme`, `setAllowWater`, `loadDemo`, `clearZone`, `undo`, `fit`, `destroy` — and pushes all output through **callbacks** in `options`: `onStatus`, `onMetrics`, `onScenario`, `onReport`, `onHint`, `onPills`, `onToast`. Types live in `lib/cityTwinMap.d.ts`.
+- `CityTwinApp.tsx` owns React state, renders the `#map` container + shadcn overlay cards (`ControlsCard`, `StatusCard`, `DashboardCard`, `LegendCard` in `components/citytwin/`), and wires controls: a shadcn `Slider`/`Switch`/`Button` change calls a handle method; an engine callback updates React state. Theme is synced with `next-themes` and `handle.setTheme`.
+- The marketing landing (`/`) is plain shadcn in `components/marketing/*`; its `HeroMap.tsx` is a separate read-only MapLibre instance.
 
-**Consequence:** the React components and the engine are coupled by string `id`s, not props. If you rename/remove an `id` in a component (e.g. a slider `id` in `ControlsPanel.js`, or `#demoButton`, `#allowWaterToggle`, `#statusText`), you must update the matching `getElementById`/`addEventListener` in `cityTwinMap.js`, and vice versa. There is no compile-time check linking them. The slider ids `density/green/parking/street/alignment/height` map directly to `state.settings` keys.
+**Consequence:** there is no `getElementById` coupling anymore. shadcn `Slider`/`Switch` are *controlled* components — they must read React state and write through the handle (that's the whole reason for the bridge). Do **not** reintroduce DOM-id wiring. One CSS coupling remains: the engine creates plain `.vertex-marker` / `.midpoint-marker` DOM nodes and a `#map` container, styled in `app/globals.css` (outside shadcn) — keep those styles when editing CSS.
 
 ### The generation pipeline (inside cityTwinMap.js)
 
@@ -64,6 +64,6 @@ User edits polygon → debounced handlers → render. Two parallel debounced pat
 - `.github/workflows/deploy.yml` runs on push to `main`:
   - Frontend → builds and deploys `frontend/out` to **Cloudflare Pages** (needs `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_PROJECT_NAME`).
   - Backend → rsyncs `backend/` to a VPS at `/opt/urbanflux/backend`, reinstalls deps, restarts the `urbanflux-backend` systemd service (needs `VPS_*` secrets; see `backend/README.md` for the exact systemd command and secret values).
-- Static export (`output: "export"` in `next.config.mjs`) means **no Next.js server features** — no API routes, no server components doing runtime data fetching, no `next/image` loader. All dynamic behavior is client-side fetches to Overpass/tile servers.
+- Static export (`output: "export"` in `next.config.mjs`) means **no Next.js server features** — no API routes, no server components doing runtime data fetching, no `next/image` loader. Both `/` and `/app` prerender to static HTML and hydrate; anything touching `window`/MapLibre must be in a `"use client"` component and mounted in an effect. All dynamic behavior is client-side fetches to Overpass/tile servers.
 
 Live: frontend `https://urbanflux.london/`, API `https://api.urbanflux.london/`.
