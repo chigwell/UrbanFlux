@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from shapely.geometry import shape
 from shapely.ops import unary_union
 
@@ -17,7 +17,36 @@ from shapely.ops import unary_union
 # App setup
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="UrbanFlux API")
+tags_metadata = [
+    {
+        "name": "status",
+        "description": "Service status and connectivity checks.",
+    },
+    {
+        "name": "population",
+        "description": "Approximate population calculations for selected GeoJSON areas.",
+    },
+    {
+        "name": "impact",
+        "description": "Illustrative replanning impact calculations for selected areas and UI parameters.",
+    },
+]
+
+app = FastAPI(
+    title="UrbanFlux API",
+    summary="FastAPI backend for UrbanFlux CityTwin.",
+    description=(
+        "UrbanFlux backend API for service checks, selected-area population estimates, "
+        "and replanning impact calculations. OpenAPI is available at `/openapi.json`, "
+        "Swagger UI at `/docs`, and ReDoc at `/redoc`."
+    ),
+    version="0.1.0",
+    contact={
+        "name": "UrbanFlux Team",
+        "url": "https://urbanflux.london/",
+    },
+    openapi_tags=tags_metadata,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -136,47 +165,137 @@ def _load_lsoa_features() -> list[dict]:
 
 class GeoJSONPolygon(BaseModel):
     """A GeoJSON Polygon or MultiPolygon Feature or raw geometry."""
-    type: str
-    coordinates: Any | None = None
-    geometry: Any | None = None  # if caller wraps in a Feature
+    type: str = Field(
+        ...,
+        description="GeoJSON object type. Use `Polygon`, `MultiPolygon`, or `Feature`.",
+        examples=["Polygon"],
+    )
+    coordinates: Any | None = Field(
+        default=None,
+        description="GeoJSON coordinates for a raw Polygon or MultiPolygon geometry.",
+    )
+    geometry: Any | None = Field(
+        default=None,
+        description="GeoJSON geometry object when `type` is `Feature`.",
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [
+                            [-0.1312, 51.5069],
+                            [-0.1198, 51.5075],
+                            [-0.1158, 51.5015],
+                            [-0.1268, 51.4987],
+                            [-0.1355, 51.5018],
+                            [-0.1312, 51.5069],
+                        ]
+                    ],
+                }
+            ]
+        }
+    }
 
 
 class ReplanningParams(BaseModel):
-    road_width_m: float = 10.0
-    lanes: int = 2
-    speed_limit_kmh: int = 30
-    cycle_lane: bool = False
-    green_space_pct: float = 0.0  # 0–100
+    road_width_m: float = Field(10.0, ge=1.0, le=80.0, description="Planned road width in metres.")
+    lanes: int = Field(2, ge=1, le=8, description="Planned number of traffic lanes.")
+    speed_limit_kmh: int = Field(30, ge=5, le=130, description="Proposed road speed limit in km/h.")
+    cycle_lane: bool = Field(False, description="Whether protected cycle lanes are included.")
+    green_space_pct: float = Field(0.0, ge=0.0, le=100.0, description="Target green space percentage.")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "road_width_m": 10.0,
+                    "lanes": 2,
+                    "speed_limit_kmh": 30,
+                    "cycle_lane": True,
+                    "green_space_pct": 35.0,
+                }
+            ]
+        }
+    }
+
+
+class MessageResponse(BaseModel):
+    message: str = Field(..., description="Human-readable response message.")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"message": "UrbanFlux backend is running"},
+                {"message": "Hello World"},
+            ]
+        }
+    }
 
 
 class PopulationRequest(BaseModel):
-    polygon: GeoJSONPolygon
+    polygon: GeoJSONPolygon = Field(..., description="Selected area as a GeoJSON Polygon, MultiPolygon, or Feature.")
 
 
 class PopulationResponse(BaseModel):
-    approximate_population: int
-    lsoa_count: int
-    area_km2: float
-    note: str = "2021 Census, LSOA-level intersection"
+    approximate_population: int = Field(..., ge=0, description="Estimated population inside the selected area.")
+    lsoa_count: int = Field(..., ge=0, description="Number of intersecting LSOA geometries used.")
+    area_km2: float = Field(..., ge=0, description="Approximate selected area in square kilometres.")
+    note: str = Field("2021 Census, LSOA-level intersection", description="Calculation note and data source context.")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "approximate_population": 2480,
+                    "lsoa_count": 5,
+                    "area_km2": 0.42,
+                    "note": "2021 Census, LSOA-level intersection",
+                }
+            ]
+        }
+    }
 
 
 class ImpactMetric(BaseModel):
-    improved_metric: str
-    improved_value: str
-    delta: str
-    source: str
+    improved_metric: str = Field(..., description="Name of the improved metric.")
+    improved_value: str = Field(..., description="Estimated metric value after replanning.")
+    delta: str = Field(..., description="Difference compared with the previous or baseline value.")
+    source: str = Field(..., description="Source URL for the data, benchmark, or method.")
 
 
 class ImpactRequest(BaseModel):
-    polygon: GeoJSONPolygon
-    params: ReplanningParams = ReplanningParams()
+    polygon: GeoJSONPolygon = Field(..., description="Selected area as a GeoJSON Polygon, MultiPolygon, or Feature.")
+    params: ReplanningParams = Field(default_factory=ReplanningParams, description="User-selected replanning parameters.")
 
 
 class ImpactResponse(BaseModel):
-    approximate_population: int
-    area_km2: float
-    metrics: list[ImpactMetric]
-    note: str = "Illustrative estimates – model integration in progress"
+    approximate_population: int = Field(..., ge=0, description="Estimated population affected by replanning.")
+    area_km2: float = Field(..., ge=0, description="Approximate selected area in square kilometres.")
+    metrics: list[ImpactMetric] = Field(..., description="List of estimated impact metrics.")
+    note: str = Field("Illustrative estimates - model integration in progress", description="Calculation note.")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "approximate_population": 2480,
+                    "area_km2": 0.42,
+                    "metrics": [
+                        {
+                            "improved_metric": "Cycling mode share",
+                            "improved_value": "+1.5 percentage points",
+                            "delta": "+1.5pp vs baseline",
+                            "source": "https://tfl.gov.uk/corporate/publications-and-reports/streets-toolkit",
+                        }
+                    ],
+                    "note": "Illustrative estimates - model integration in progress",
+                }
+            ]
+        }
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -307,21 +426,46 @@ def _compute_impact_metrics(
 # Existing endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/")
-def root() -> dict[str, str]:
-    return {"message": "UrbanFlux backend is running"}
+@app.get(
+    "/",
+    tags=["status"],
+    summary="Backend status",
+    description="Returns a basic message confirming that the UrbanFlux backend is running.",
+    response_model=MessageResponse,
+)
+def root() -> MessageResponse:
+    return MessageResponse(message="UrbanFlux backend is running")
 
 
-@app.get("/hello")
-def hello_world() -> dict[str, str]:
-    return {"message": "Hello World"}
+@app.get(
+    "/hello",
+    tags=["status"],
+    summary="Hello World",
+    description="Returns a Hello World message for API connectivity checks.",
+    response_model=MessageResponse,
+)
+def hello_world() -> MessageResponse:
+    return MessageResponse(message="Hello World")
 
 
 # ---------------------------------------------------------------------------
 # New endpoints
 # ---------------------------------------------------------------------------
 
-@app.post("/population", response_model=PopulationResponse)
+@app.post(
+    "/population",
+    tags=["population"],
+    summary="Calculate selected-area population",
+    description=(
+        "Calculates approximate population for a selected GeoJSON area by intersecting "
+        "the polygon with London LSOA geometries and weighting population by overlap."
+    ),
+    response_model=PopulationResponse,
+    responses={
+        422: {"description": "Invalid GeoJSON geometry or request payload."},
+        503: {"description": "Population/boundary data source unavailable."},
+    },
+)
 def get_population(request: PopulationRequest) -> PopulationResponse:
     """
     Return approximate population for the supplied GeoJSON polygon.
@@ -345,7 +489,20 @@ def get_population(request: PopulationRequest) -> PopulationResponse:
     )
 
 
-@app.post("/impact", response_model=ImpactResponse)
+@app.post(
+    "/impact",
+    tags=["impact"],
+    summary="Calculate replanning impact",
+    description=(
+        "Calculates illustrative impact metrics for a selected GeoJSON area and the "
+        "replanning parameters chosen in the frontend UI."
+    ),
+    response_model=ImpactResponse,
+    responses={
+        422: {"description": "Invalid GeoJSON geometry or request payload."},
+        503: {"description": "Population/boundary data source unavailable."},
+    },
+)
 def get_impact(request: ImpactRequest) -> ImpactResponse:
     """
     Return replanning impact metrics for the supplied polygon and parameters.
