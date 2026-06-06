@@ -4,6 +4,12 @@
 
 UrbanFlux is a Next.js CityTwin map frontend with a FastAPI backend.
 
+## Live URLs
+
+- Frontend: https://urbanflux.london/
+- API: https://api.urbanflux.london/
+- Cloudflare Pages fallback: https://urbanflux.pages.dev/
+
 ## Borough assignment model
 
 The borough assignment model is hosted on Hugging Face:
@@ -14,12 +20,6 @@ The borough assignment model is hosted on Hugging Face:
 The model was fine-tuned to identify which London borough a CSV row is about.
 It uses the unstructured text description of the source together with the CSV
 headers and row values to infer the borough name.
-
-## Live URLs
-
-- Frontend: https://urbanflux.london/
-- API: https://api.urbanflux.london/
-- Cloudflare Pages fallback: https://urbanflux.pages.dev/
 
 ## Structure
 
