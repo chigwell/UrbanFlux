@@ -5,6 +5,7 @@ import os
 import sys
 import urllib.request
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -495,6 +496,199 @@ def _compute_impact_metrics(
 
 
 # ---------------------------------------------------------------------------
+# Nemotron impact helpers
+# ---------------------------------------------------------------------------
+
+NEMOTRON_IMPACT_SYSTEM_PROMPT = """You are an urban planning impact analyst for London.
+
+You will be given:
+- Area statistics: population, size in km², and borough name
+- Replanning parameters chosen by a planner (housing density, green space target, parking pressure, road fill, road alignment, height ambition) — all as integers 0–100
+- Real borough data rows from the London Datastore (housing, transport, planning, socioeconomic themes)
+- Benchmark impact metrics already calculated from published sources
+
+Your task is to return a JSON array of impact metrics, using the benchmark values as a baseline and refining them where the real borough data justifies it.
+
+Rules:
+- Only use the sources and data provided. Do not hallucinate statistics, datasets, or sources.
+- If real borough data supports a more precise estimate, use it and cite the dataset.
+- If there is no relevant data for a metric, set improved_value and delta to "" (empty string).
+- Return ONLY a valid JSON array. No preamble, no explanation, no markdown, no code fences.
+- Every object in the array must have exactly these four string fields: improved_metric, improved_value, delta, source.
+
+Example output format:
+[
+  {
+    "improved_metric": "Cycling mode share",
+    "improved_value": "+3.2 percentage points",
+    "delta": "+3.2pp vs baseline",
+    "source": "https://tfl.gov.uk/corporate/publications-and-reports/streets-toolkit"
+  }
+]"""
+
+
+_TRUSTED_THEMES = {"housing", "transport", "planning_land", "socioeconomic"}
+_NEMOTRON_TIMEOUT_S = 12  # wall-clock seconds before we fall back to benchmarks
+
+
+def _fetch_borough_rows(lat: float, lon: float) -> str:
+    """
+    Pull the latest row preview for each trusted theme from Eugene's SQLite
+    via the live /borough-data-test endpoint. Returns a formatted string
+    for inclusion in the Nemotron prompt, or empty string on failure.
+    """
+    try:
+        params = urllib.parse.urlencode({"lat": lat, "lon": lon})
+        req = urllib.request.Request(
+            f"https://api.urbanflux.london/borough-data-test?{params}",
+            headers={"User-Agent": "UrbanFlux/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read())
+    except Exception:
+        return ""
+
+    lines = []
+    borough_name = (data.get("borough") or {}).get("name", "")
+    if borough_name:
+        lines.append(f"Borough: {borough_name}")
+
+    for row in data.get("latest_rows_by_theme", []):
+        if row.get("theme") not in _TRUSTED_THEMES:
+            continue
+        preview = (row.get("source_row_preview") or "").strip()
+        date = row.get("date_start") or ""
+        if preview:
+            lines.append(f"[{row['theme']}] {date}: {preview}")
+
+    return "\n".join(lines)
+
+
+def _metrics_to_text(metrics: list[ImpactMetric]) -> str:
+    return "\n".join(
+        f"- {m.improved_metric}: {m.improved_value} (delta: {m.delta}, source: {m.source})"
+        for m in metrics
+    )
+
+
+def _call_nemotron(prompt: str) -> list[ImpactMetric] | None:
+    """
+    Call Nemotron via fal.ai and parse the structured JSON response.
+    Returns None if the call fails or returns unparseable output.
+    """
+    try:
+        import fal_client
+    except ImportError:
+        return None
+
+    fal_key = os.getenv("FAL_KEY")
+    if not fal_key:
+        return None
+
+    try:
+        result = fal_client.subscribe(
+            "openrouter/router",
+            arguments={
+                "model": "nvidia/nemotron-3-ultra-550b-a55b",
+                "system_prompt": NEMOTRON_IMPACT_SYSTEM_PROMPT,
+                "prompt": prompt,
+            },
+            with_logs=False,
+        )
+    except Exception:
+        return None
+
+    raw = (
+        result.get("output")
+        or result.get("text")
+        or (result.get("choices") or [{}])[0].get("message", {}).get("content")
+        or ""
+    )
+
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            return None
+        metrics = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            metrics.append(ImpactMetric(
+                improved_metric=str(item.get("improved_metric", "")),
+                improved_value=str(item.get("improved_value", "")),
+                delta=str(item.get("delta", "")),
+                source=str(item.get("source", "")),
+            ))
+        return metrics if metrics else None
+    except (json.JSONDecodeError, Exception):
+        return None
+
+
+def _nemotron_impact_metrics(
+    population: int,
+    area_km2: float,
+    params: ReplanningParams,
+    benchmark_metrics: list[ImpactMetric],
+    lat: float,
+    lon: float,
+) -> tuple[list[ImpactMetric], str]:
+    """
+    Try to get Nemotron-refined metrics within the timeout window.
+    Falls back to benchmark metrics if Nemotron is too slow or unavailable.
+    Returns (metrics, note).
+    """
+    borough_rows = _fetch_borough_rows(lat, lon)
+    borough_name = ""
+    for line in borough_rows.splitlines():
+        if line.startswith("Borough:"):
+            borough_name = line.replace("Borough:", "").strip()
+            break
+
+    prompt = f"""Area statistics:
+- Population: {population:,}
+- Area: {area_km2} km²
+- Borough: {borough_name or "unknown"}
+
+Replanning parameters (0–100 scale):
+- Housing density: {params.housing_density}
+- Green space target: {params.green_space_target}
+- Parking pressure: {params.parking_pressure}
+- Road fill: {params.road_fill}
+- Road alignment: {params.road_alignment}
+- Height ambition: {params.height_ambition}
+
+Real borough data from London Datastore:
+{borough_rows if borough_rows else "(unavailable)"}
+
+Benchmark impact metrics (use as baseline):
+{_metrics_to_text(benchmark_metrics)}
+
+Return the refined JSON array of impact metrics."""
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_call_nemotron, prompt)
+        try:
+            nemotron_metrics = future.result(timeout=_NEMOTRON_TIMEOUT_S)
+        except FuturesTimeoutError:
+            nemotron_metrics = None
+
+    if nemotron_metrics:
+        note = (
+            f"Refined by Nvidia Nemotron using real {borough_name} data"
+            if borough_name else
+            "Refined by Nvidia Nemotron using London Datastore data"
+        )
+        return nemotron_metrics, note
+
+    # Fallback
+    note = (
+        f"Benchmark estimates for {borough_name}" if borough_name
+        else "Illustrative benchmark estimates"
+    )
+    return benchmark_metrics, note
+
+
+# ---------------------------------------------------------------------------
 # Existing endpoints
 # ---------------------------------------------------------------------------
 
@@ -579,9 +773,12 @@ def get_impact(request: ImpactRequest) -> ImpactResponse:
     """
     Return replanning impact metrics for the supplied polygon and parameters.
 
-    Population is calculated from LSOA intersection; impact metrics are
-    derived from published London/TfL benchmarks (illustrative until
-    Eugene's model is integrated via data_sources).
+    Flow:
+    1. Calculate population from LSOA intersection.
+    2. Compute benchmark metrics from published London/TfL sources.
+    3. Fetch real borough data rows from the London Datastore (via SQLite).
+    4. Pass everything to Nvidia Nemotron for refinement (12 s timeout).
+    5. Fall back to benchmark metrics if Nemotron is unavailable or too slow.
     """
     geom = _extract_shapely_geom(request.polygon)
     area = _area_km2(geom)
@@ -591,12 +788,23 @@ def get_impact(request: ImpactRequest) -> ImpactResponse:
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
-    metrics = _compute_impact_metrics(population, area, request.params)
+    benchmark_metrics = _compute_impact_metrics(population, area, request.params)
+
+    centroid = geom.centroid
+    metrics, note = _nemotron_impact_metrics(
+        population=population,
+        area_km2=round(area, 4),
+        params=request.params,
+        benchmark_metrics=benchmark_metrics,
+        lat=centroid.y,
+        lon=centroid.x,
+    )
 
     return ImpactResponse(
         approximate_population=population,
         area_km2=round(area, 4),
         metrics=metrics,
+        note=note,
     )
 
 
