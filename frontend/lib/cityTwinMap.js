@@ -41,7 +41,14 @@ const WATER_RIVER_LINE_EXCLUSION_KM = 0.15;
 const WATER_CANAL_LINE_EXCLUSION_KM = 0.08;
 const WATER_MINOR_LINE_EXCLUSION_KM = 0.05;
 const WATER_DEFAULT_LINE_EXCLUSION_KM = 0.075;
-const MAX_WATER_OBSTACLES = 720;
+const MAX_WATER_OBSTACLES = 400;
+const CONTEXT_CACHE_MAX = 8;
+const OVERPASS_COOLDOWN_MS = 90_000;
+const OVERPASS_BBOX_CACHE_MAX = 12;
+// Per-kind caps for fetched context. A single flat cap let dense road counts
+// (tens of thousands in central London) starve water/building/park down to zero,
+// which removed the river masks and let the plan build over the Thames.
+const CONTEXT_KIND_BUDGETS = { road: 1200, water: 500, building: 600, park: 250 };
 const WATER_CONTEXT_READY_STATES = new Set(["vector", "osm", "partial"]);
 
 
@@ -80,8 +87,12 @@ const state = {
   contextStatus: "empty",
   contextFetchController: null,
   overpassEndpointIndex: 0,
-  generationTimer: null,
+  generationRaf: null,
   contextTimer: null,
+  statsCache: null,
+  contextCache: new Map(),
+  overpassCooldownUntil: 0,
+  overpassBBoxCache: new Map(),
   toastTimer: null,
   mapReady: false,
   layersReady: false,
@@ -583,8 +594,6 @@ function renderVertexMarkers() {
       const lngLat = marker.getLngLat();
       state.vertices[index] = [lngLat.lng, lngLat.lat];
       updateSelectionSource();
-      renderMidpointMarkersOnly();
-      scheduleGeneration();
     });
     marker.on("dragend", () => {
       const lngLat = marker.getLngLat();
@@ -679,8 +688,13 @@ function polygonFeature(vertices) {
 }
 
 function scheduleGeneration() {
-  window.clearTimeout(state.generationTimer);
-  state.generationTimer = window.setTimeout(generateScenario, 40);
+  if (state.generationRaf !== null) {
+    cancelAnimationFrame(state.generationRaf);
+  }
+  state.generationRaf = requestAnimationFrame(() => {
+    state.generationRaf = null;
+    generateScenario();
+  });
 }
 
 function scheduleContextFetch() {
@@ -689,6 +703,29 @@ function scheduleContextFetch() {
   }
   window.clearTimeout(state.contextTimer);
   state.contextTimer = window.setTimeout(fetchContextForCurrentPolygon, 520);
+}
+
+function applyContextResult(status, features) {
+  state.contextStatus = status;
+  state.contextFeatures = features;
+  state.statsCache = null;
+  setSourceData("context", { type: "FeatureCollection", features });
+}
+
+function cacheContextResult(contextKey, status, features) {
+  state.contextCache.set(contextKey, { status, features });
+  while (state.contextCache.size > CONTEXT_CACHE_MAX) {
+    const oldest = state.contextCache.keys().next().value;
+    state.contextCache.delete(oldest);
+  }
+}
+
+function cacheOverpassPayload(bboxKey, features) {
+  state.overpassBBoxCache.set(bboxKey, features);
+  while (state.overpassBBoxCache.size > OVERPASS_BBOX_CACHE_MAX) {
+    const oldest = state.overpassBBoxCache.keys().next().value;
+    state.overpassBBoxCache.delete(oldest);
+  }
 }
 
 async function fetchContextForCurrentPolygon() {
@@ -700,10 +737,18 @@ async function fetchContextForCurrentPolygon() {
   const contextKey = `${state.theme}:${Math.round(map.getZoom() * 10)}:${bbox
     .map((value) => value.toFixed(4))
     .join(",")}`;
+  const cached = state.contextCache.get(contextKey);
+  if (cached) {
+    state.contextKey = contextKey;
+    applyContextResult(cached.status, cached.features);
+    generateScenario();
+    return;
+  }
   if (contextKey === state.contextKey && state.contextFeatures.length) {
     return;
   }
   state.contextKey = contextKey;
+  state.statsCache = null;
 
   if (state.contextFetchController) {
     state.contextFetchController.abort();
@@ -714,13 +759,34 @@ async function fetchContextForCurrentPolygon() {
   setStatus(34, "Reading vector basemap topology for roads, rivers, buildings and parks...");
   const vectorFeatures = extractVectorTileContextFeatures({ selectedPolygon: polygon, bbox });
   if (vectorFeatures.length > 0) {
-    state.contextStatus = "vector";
-    state.contextFeatures = vectorFeatures;
-    setSourceData("context", { type: "FeatureCollection", features: vectorFeatures });
+    applyContextResult("vector", vectorFeatures);
     setStatus(
       54,
       `Loaded ${vectorFeatures.length.toLocaleString()} vector-tile features. Fetching raw OSM road graph for exact boundary anchors...`,
     );
+  }
+
+  const overpassBboxKey = bbox.map((value) => value.toFixed(3)).join(",");
+  const overpassCached = state.overpassBBoxCache.get(overpassBboxKey);
+  if (overpassCached) {
+    const features = capContextFeaturesByKind(mergeContextFeatures(vectorFeatures, overpassCached));
+    applyContextResult("osm", features);
+    cacheContextResult(contextKey, "osm", features);
+    setStatus(
+      78,
+      `Merged ${features.length.toLocaleString()} basemap + cached OSM geometries. Rebuilding road-connected plan...`,
+    );
+    generateScenario();
+    return;
+  }
+
+  if (Date.now() < state.overpassCooldownUntil) {
+    if (vectorFeatures.length > 0) {
+      cacheContextResult(contextKey, "vector", vectorFeatures);
+      setStatus(68, "Overpass cooling down. Using vector-tile topology.");
+      generateScenario();
+    }
+    return;
   }
 
   setStatus(62, "Fetching raw OSM roads, buildings, parks and water geometry around the selected boundary...");
@@ -735,14 +801,17 @@ async function fetchContextForCurrentPolygon() {
       signal: state.contextFetchController.signal,
     });
     if (!response.ok) {
+      if (response.status === 429 || response.status >= 500) {
+        state.overpassCooldownUntil = Date.now() + OVERPASS_COOLDOWN_MS;
+      }
       throw new Error(`Overpass HTTP ${response.status}`);
     }
     const data = await response.json();
     const overpassFeatures = parseOverpassFeatures(data, polygon);
-    const features = mergeContextFeatures(vectorFeatures, overpassFeatures).slice(0, 2200);
-    state.contextStatus = "osm";
-    state.contextFeatures = features;
-    setSourceData("context", { type: "FeatureCollection", features });
+    cacheOverpassPayload(overpassBboxKey, overpassFeatures);
+    const features = capContextFeaturesByKind(mergeContextFeatures(vectorFeatures, overpassFeatures));
+    applyContextResult("osm", features);
+    cacheContextResult(contextKey, "osm", features);
     setStatus(
       78,
       `Merged ${features.length.toLocaleString()} basemap + raw OSM geometries. Rebuilding road-connected plan...`,
@@ -752,12 +821,10 @@ async function fetchContextForCurrentPolygon() {
     if (error.name === "AbortError") {
       return;
     }
-    console.warn("OSM context fetch failed", error);
     state.overpassEndpointIndex += 1;
     if (vectorFeatures.length > 0) {
-      state.contextStatus = "partial";
-      state.contextFeatures = vectorFeatures;
-      setSourceData("context", { type: "FeatureCollection", features: vectorFeatures });
+      applyContextResult("partial", vectorFeatures);
+      cacheContextResult(contextKey, "partial", vectorFeatures);
       setStatus(
         68,
         "Raw OSM fetch failed, but vector-tile topology is available. Using basemap-snapped road connectors.",
@@ -765,6 +832,7 @@ async function fetchContextForCurrentPolygon() {
       generateScenario();
       return;
     }
+    console.warn("OSM context fetch failed with no vector fallback", error);
     state.contextStatus = "failed";
     state.contextFeatures = [];
     setSourceData("context", EMPTY);
@@ -778,34 +846,35 @@ function extractVectorTileContextFeatures({ selectedPolygon, bbox }) {
     return [];
   }
 
+  const filterCtx = createContextFilterCtx(selectedPolygon);
   const layers = discoverBasemapContextLayers();
   const pixelBox = bboxToPixelQueryBox(bbox, 132);
   const features = [];
 
   features.push(
-    ...queryRenderedContextFeatures(pixelBox, layers.road, "road", selectedPolygon),
-    ...queryRenderedContextFeatures(pixelBox, layers.water, "water", selectedPolygon),
-    ...queryRenderedContextFeatures(pixelBox, layers.building, "building", selectedPolygon),
-    ...queryRenderedContextFeatures(pixelBox, layers.park, "park", selectedPolygon),
+    ...queryRenderedContextFeatures(pixelBox, layers.road, "road", filterCtx),
+    ...queryRenderedContextFeatures(pixelBox, layers.water, "water", filterCtx),
+    ...queryRenderedContextFeatures(pixelBox, layers.building, "building", filterCtx),
+    ...queryRenderedContextFeatures(pixelBox, layers.park, "park", filterCtx),
   );
 
   // queryRenderedFeatures is visually exact, but hidden/minor roads may be absent at some zooms.
   // querySourceFeatures fills that gap from currently loaded vector tiles. The layer list covers
   // OpenMapTiles/OpenFreeMap and common Protomaps-compatible source-layer names.
   if (features.filter((feature) => feature.properties.kind === "road").length < 10) {
-    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.road, "road", selectedPolygon));
+    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.road, "road", filterCtx));
   }
   if (features.filter((feature) => feature.properties.kind === "water").length < 4) {
-    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.water, "water", selectedPolygon));
+    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.water, "water", filterCtx));
   }
   if (features.filter((feature) => feature.properties.kind === "building").length < 12) {
-    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.building, "building", selectedPolygon));
+    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.building, "building", filterCtx));
   }
   if (features.filter((feature) => feature.properties.kind === "park").length < 6) {
-    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.park, "park", selectedPolygon));
+    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.park, "park", filterCtx));
   }
 
-  return dedupeContextFeatures(features).slice(0, 1800);
+  return capContextFeaturesByKind(dedupeContextFeatures(features));
 }
 
 function discoverBasemapContextLayers() {
@@ -853,25 +922,25 @@ function bboxToPixelQueryBox(bbox, padding) {
   ];
 }
 
-function queryRenderedContextFeatures(pixelBox, layerIds, kind, selectedPolygon) {
+function queryRenderedContextFeatures(pixelBox, layerIds, kind, filterCtx) {
   if (!layerIds.length) {
     return [];
   }
   try {
     return map
       .queryRenderedFeatures(pixelBox, { layers: layerIds })
-      .flatMap((feature) => normaliseMapFeature(feature, kind, selectedPolygon, "basemap-rendered"));
+      .flatMap((feature) => normaliseMapFeature(feature, kind, filterCtx, "basemap-rendered"));
   } catch (error) {
     console.warn(`Rendered ${kind} context query failed`, error);
     return [];
   }
 }
 
-function querySourceContextFeatureLayers(sourceLayers, kind, selectedPolygon) {
-  return sourceLayers.flatMap((sourceLayer) => querySourceContextFeatures(sourceLayer, kind, selectedPolygon));
+function querySourceContextFeatureLayers(sourceLayers, kind, filterCtx) {
+  return sourceLayers.flatMap((sourceLayer) => querySourceContextFeatures(sourceLayer, kind, filterCtx));
 }
 
-function querySourceContextFeatures(sourceLayer, kind, selectedPolygon) {
+function querySourceContextFeatures(sourceLayer, kind, filterCtx) {
   const style = map.getStyle();
   const sourceIds = Object.entries(style.sources || {})
     .filter(([, source]) => source && source.type === "vector")
@@ -883,7 +952,7 @@ function querySourceContextFeatures(sourceLayer, kind, selectedPolygon) {
       features.push(
         ...map
           .querySourceFeatures(sourceId, { sourceLayer })
-          .flatMap((feature) => normaliseMapFeature(feature, kind, selectedPolygon, "basemap-source")),
+          .flatMap((feature) => normaliseMapFeature(feature, kind, filterCtx, "basemap-source")),
       );
     } catch (_) {
       // Not every basemap source exposes every source-layer.
@@ -892,7 +961,7 @@ function querySourceContextFeatures(sourceLayer, kind, selectedPolygon) {
   return features;
 }
 
-function normaliseMapFeature(feature, kind, selectedPolygon, contextSource) {
+function normaliseMapFeature(feature, kind, filterCtx, contextSource) {
   const geometry = feature.geometry;
   if (!geometry) {
     return [];
@@ -916,7 +985,7 @@ function normaliseMapFeature(feature, kind, selectedPolygon, contextSource) {
         properties: base,
         geometry: { type: "LineString", coordinates },
       }))
-      .filter((candidate) => candidate.geometry.coordinates.length >= 2 && shouldKeepContextFeature(candidate, selectedPolygon));
+      .filter((candidate) => candidate.geometry.coordinates.length >= 2 && shouldKeepContextFeature(candidate, filterCtx));
   }
 
   if (kind === "water" && (geometry.type === "LineString" || geometry.type === "MultiLineString")) {
@@ -926,7 +995,7 @@ function normaliseMapFeature(feature, kind, selectedPolygon, contextSource) {
         properties: base,
         geometry: { type: "LineString", coordinates },
       }))
-      .filter((candidate) => candidate.geometry.coordinates.length >= 2 && shouldKeepContextFeature(candidate, selectedPolygon));
+      .filter((candidate) => candidate.geometry.coordinates.length >= 2 && shouldKeepContextFeature(candidate, filterCtx));
   }
 
   return flattenPolygonGeometry(geometry)
@@ -939,7 +1008,7 @@ function normaliseMapFeature(feature, kind, selectedPolygon, contextSource) {
         properties: base,
         geometry: { type: "Polygon", coordinates: [closeRing(ring)] },
       };
-      return shouldKeepContextFeature(polygon, selectedPolygon) ? polygon : null;
+      return shouldKeepContextFeature(polygon, filterCtx) ? polygon : null;
     })
     .filter(Boolean);
 }
@@ -1014,6 +1083,25 @@ function dedupeContextFeatures(features) {
   return result;
 }
 
+// Cap a mixed-kind feature list per kind instead of with a single flat slice, so
+// abundant roads can never crowd out water/building/park (which are appended after
+// roads). This keeps river masks available for water-aware replanning.
+function capContextFeaturesByKind(features, budgets = CONTEXT_KIND_BUDGETS) {
+  const counts = {};
+  const result = [];
+  for (const feature of features) {
+    const kind = feature.properties?.kind || "other";
+    const budget = budgets[kind] ?? 150;
+    const used = counts[kind] || 0;
+    if (used >= budget) {
+      continue;
+    }
+    counts[kind] = used + 1;
+    result.push(feature);
+  }
+  return result;
+}
+
 function contextFeatureKey(feature) {
   const coordinates = firstAndLastCoordinates(feature.geometry);
   if (!coordinates) {
@@ -1070,17 +1158,20 @@ out body geom qt;
 }
 
 function parseOverpassFeatures(data, selectedPolygon) {
+  const filterCtx = createContextFilterCtx(selectedPolygon);
   const features = [];
   for (const element of data.elements || []) {
-    const elementFeatures = parseOverpassElement(element, selectedPolygon);
+    const elementFeatures = parseOverpassElement(element, filterCtx);
     for (const feature of elementFeatures) {
       features.push(feature);
     }
   }
-  return features.slice(0, 1800);
+  // Overpass returns highway ways first; a flat slice here dropped the water ways
+  // that come later in the query. Cap per kind so rivers always survive.
+  return capContextFeaturesByKind(features);
 }
 
-function parseOverpassElement(element, selectedPolygon) {
+function parseOverpassElement(element, filterCtx) {
   const tags = element.tags || {};
   const features = [];
 
@@ -1096,7 +1187,7 @@ function parseOverpassElement(element, selectedPolygon) {
         continue;
       }
       const feature = featureFromCoords(coords, kind, tags, `${element.type}/${element.id}/${member.ref || features.length}`);
-      if (feature && shouldKeepContextFeature(feature, selectedPolygon)) {
+      if (feature && shouldKeepContextFeature(feature, filterCtx)) {
         features.push(feature);
       }
     }
@@ -1113,7 +1204,7 @@ function parseOverpassElement(element, selectedPolygon) {
     return features;
   }
   const feature = featureFromCoords(coords, kind, tags, `${element.type}/${element.id}`);
-  if (feature && shouldKeepContextFeature(feature, selectedPolygon)) {
+  if (feature && shouldKeepContextFeature(feature, filterCtx)) {
     features.push(feature);
   }
   return features;
@@ -1148,21 +1239,105 @@ function featureFromCoords(coords, kind, tags, osmId) {
   };
 }
 
-function shouldKeepContextFeature(feature, selectedPolygon) {
-  try {
-    const searchEnvelope = turf.buffer(selectedPolygon, 0.28, { units: "kilometers", steps: 8 });
-    const intersectsSearchEnvelope = turf.booleanIntersects(feature, searchEnvelope);
-    if (!intersectsSearchEnvelope) {
-      return false;
+function createContextFilterCtx(selectedPolygon) {
+  const searchBbox = expandBbox(turf.bbox(selectedPolygon), 0.0035);
+  const coords = selectedPolygon.geometry.coordinates[0];
+  const selectionRing =
+    coords.length >= 4 && sameCoord(coords[0], coords[coords.length - 1]) ? coords.slice(0, -1) : coords;
+  return { searchBbox, selectionRing };
+}
+
+function featureLngLatBbox(feature) {
+  const geometry = feature.geometry;
+  if (!geometry) {
+    return null;
+  }
+  let minLng = Infinity;
+  let minLat = Infinity;
+  let maxLng = -Infinity;
+  let maxLat = -Infinity;
+  const visit = (lng, lat) => {
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+      return;
     }
-    if (feature.properties.kind !== "building") {
-      return true;
+    minLng = Math.min(minLng, lng);
+    maxLng = Math.max(maxLng, lng);
+    minLat = Math.min(minLat, lat);
+    maxLat = Math.max(maxLat, lat);
+  };
+  if (geometry.type === "LineString") {
+    for (const coord of geometry.coordinates) {
+      visit(coord[0], coord[1]);
     }
-    const centroid = turf.centroid(feature);
-    return !turf.booleanPointInPolygon(centroid, selectedPolygon);
-  } catch (_) {
+  } else if (geometry.type === "Polygon") {
+    for (const coord of geometry.coordinates[0]) {
+      visit(coord[0], coord[1]);
+    }
+  }
+  if (!Number.isFinite(minLng)) {
+    return null;
+  }
+  return [minLng, minLat, maxLng, maxLat];
+}
+
+function lngLatBboxesOverlap(a, b) {
+  return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+}
+
+function pointInLngLatRing(lng, lat, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    const xi = ring[i][0];
+    const yi = ring[i][1];
+    const xj = ring[j][0];
+    const yj = ring[j][1];
+    const intersects = yi > lat !== yj > lat && lng < ((xj - xi) * (lat - yi)) / (yj - yi || 1e-12) + xi;
+    if (intersects) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function featureCentroidLngLat(feature) {
+  const geometry = feature.geometry;
+  if (geometry.type === "LineString") {
+    let sumLng = 0;
+    let sumLat = 0;
+    for (const coord of geometry.coordinates) {
+      sumLng += coord[0];
+      sumLat += coord[1];
+    }
+    const count = geometry.coordinates.length;
+    return count ? [sumLng / count, sumLat / count] : null;
+  }
+  if (geometry.type === "Polygon") {
+    const ring = geometry.coordinates[0];
+    const limit = ring.length >= 4 && sameCoord(ring[0], ring[ring.length - 1]) ? ring.length - 1 : ring.length;
+    let sumLng = 0;
+    let sumLat = 0;
+    for (let index = 0; index < limit; index += 1) {
+      sumLng += ring[index][0];
+      sumLat += ring[index][1];
+    }
+    return limit ? [sumLng / limit, sumLat / limit] : null;
+  }
+  return null;
+}
+
+function shouldKeepContextFeature(feature, filterCtx) {
+  const featureBbox = featureLngLatBbox(feature);
+  if (!featureBbox || !lngLatBboxesOverlap(featureBbox, filterCtx.searchBbox)) {
+    return false;
+  }
+  if (feature.properties.kind !== "building") {
     return true;
   }
+  const centroid = featureCentroidLngLat(feature);
+  if (!centroid) {
+    return true;
+  }
+  return !pointInLngLatRing(centroid[0], centroid[1], filterCtx.selectionRing);
 }
 
 function classifyOsm(tags, closed) {
@@ -1243,12 +1418,19 @@ function generateScenario() {
   const centroid = polygonCentroidLocal(localPolygon);
   const random = seededRandom(hashString(state.vertices.map((coord) => coord.map((n) => n.toFixed(5)).join(":"))
     .join("|") + JSON.stringify(state.settings) + String(state.allowWater)));
-  const stats = buildContextStats({
-    features: state.contextFeatures,
-    selectedPolygon,
-    frame,
-    localPolygon,
-  });
+  const statsKey = `${state.contextKey}|${state.theme}|${state.vertices
+    .map((coord) => `${coord[0].toFixed(5)},${coord[1].toFixed(5)}`)
+    .join("|")}`;
+  let stats = state.statsCache?.key === statsKey ? state.statsCache.stats : null;
+  if (!stats) {
+    stats = buildContextStats({
+      features: state.contextFeatures,
+      selectedPolygon,
+      frame,
+      localPolygon,
+    });
+    state.statsCache = { key: statsKey, stats };
+  }
   state.latestStats = stats;
   if (!state.allowWater && !waterContextReady()) {
     setSourceData("generated", EMPTY);
@@ -1343,6 +1525,7 @@ function buildWaterObstacles({ water, selectedPolygon, frame }) {
         for (const ring of collectPolygonRings(mask)) {
           const localRing = closeLocalRing(ring.map((coord) => lngLatToLocal(coord, frame)));
           if (Math.abs(polygonSignedArea(localRing)) > 20) {
+            ensureObstacleBounds(localRing);
             obstacles.push(localRing);
           }
         }
@@ -1518,6 +1701,7 @@ function findRoadAnchors({ roads, localPolygon, frame }) {
             distanceToRoad: 0,
             edgeIndex,
             segmentIndex: index,
+            outsideTrace: buildOutsideTrace(localLine, index, hit.point, hit.point, localPolygon),
           }),
         );
       }
@@ -1548,6 +1732,7 @@ function findRoadAnchors({ roads, localPolygon, frame }) {
               distanceToRoad: best.distance,
               edgeIndex: bestEdgeIndex,
               segmentIndex: index,
+              outsideTrace: buildOutsideTrace(localLine, index, best.onFirst, best.onSecond, localPolygon),
             }),
           );
         }
@@ -1559,14 +1744,18 @@ function findRoadAnchors({ roads, localPolygon, frame }) {
 }
 
 function makeAnchor(options) {
-  const { local, outside, direction, road, highway, frame, source, priority, distanceToRoad, edgeIndex, segmentIndex } = options;
-  const leadIn = chooseLeadInPoint({ outside, local, direction, localPolygonCentroid: null });
+  const { local, outside, direction, road, highway, frame, source, priority, distanceToRoad, edgeIndex, segmentIndex, outsideTrace } = options;
+  const trace = Array.isArray(outsideTrace) ? outsideTrace.filter(isFinitePoint) : [];
+  // Prefer the real road's first outside vertex as the connection point; fall back
+  // to the synthetic lead-in only when the road has no usable outside geometry.
+  const leadIn = trace.length ? trace[0] : chooseLeadInPoint({ outside, local, direction, localPolygonCentroid: null });
   return {
     id: `${road.properties.osmId}-${edgeIndex}-${segmentIndex}-${source}`,
     local,
     coord: localToLngLat(local, frame),
     outside,
     outsideCoord: localToLngLat(outside, frame),
+    outsideTrace: trace,
     leadIn,
     leadInCoord: localToLngLat(leadIn, frame),
     direction,
@@ -1577,6 +1766,46 @@ function makeAnchor(options) {
     edgeIndex,
     osmId: road.properties.osmId,
   };
+}
+
+// Walk the existing road's own vertices outward from the boundary crossing,
+// collecting the real outside geometry (ordered far -> nearest boundary) so a
+// generated corridor can overlap and continue the actual street instead of a
+// synthetic straight stub. Returns [] for degenerate roads (caller falls back).
+function buildOutsideTrace(localLine, segmentIndex, boundaryPoint, anchorLocal, localPolygon, maxLen = 110) {
+  if (!Array.isArray(localLine) || localLine.length < 2) {
+    return [];
+  }
+  const collect = (startIndex, stepDir) => {
+    const points = [];
+    let accumulated = 0;
+    let previous = boundaryPoint;
+    for (let i = startIndex; i >= 0 && i < localLine.length; i += stepDir) {
+      const vertex = localLine[i];
+      if (!isFinitePoint(vertex) || pointInPolygon(vertex, localPolygon)) {
+        break;
+      }
+      accumulated += distanceLocal(previous, vertex);
+      if (accumulated > maxLen) {
+        break;
+      }
+      points.push(vertex);
+      previous = vertex;
+    }
+    return points;
+  };
+
+  // One side is outside for boundary crossings; both may be outside for
+  // near-boundary roads, so pick the branch reaching farthest from the boundary.
+  const downward = collect(segmentIndex, -1);
+  const upward = collect(segmentIndex + 1, 1);
+  const reach = (points) => (points.length ? distanceLocal(points[points.length - 1], anchorLocal) : -1);
+  const chosen = reach(downward) >= reach(upward) ? downward : upward;
+  if (chosen.length === 0) {
+    return [];
+  }
+  // chosen is nearest -> far; reverse to far -> nearest for path prepending.
+  return chosen.slice().reverse();
 }
 
 function chooseLeadInPoint({ outside, local, direction }) {
@@ -1890,7 +2119,7 @@ function buildSparseRoadNetwork({ anchors, centroid, localPolygon, obstacles, ra
     return { features, localRoadSegments, gatewayRoutes, connectorCount };
   }
 
-  const pairedRoutes = buildSparseGatewayRoutes({ anchors, centroid, random, alignment, roadFill });
+  const pairedRoutes = buildSparseGatewayRoutes({ anchors, centroid, random, alignment, roadFill, obstacles, localPolygon });
   for (const route of pairedRoutes) {
     const segments = constrainedLineSegments(route.points, {
       localPolygon,
@@ -1937,7 +2166,7 @@ function buildSparseRoadNetwork({ anchors, centroid, localPolygon, obstacles, ra
       obstacles,
       blockSpacing,
     });
-    const path = buildAlignedConnectorPath(anchor, target, centroid, random, alignment);
+    const path = buildAlignedConnectorPath(anchor, target, centroid, random, alignment, obstacles, localPolygon);
     const segments = constrainedLineSegments(path, {
       localPolygon,
       obstacles,
@@ -1970,7 +2199,7 @@ function buildSparseRoadNetwork({ anchors, centroid, localPolygon, obstacles, ra
   return { features, localRoadSegments, gatewayRoutes, connectorCount };
 }
 
-function buildSparseGatewayRoutes({ anchors, centroid, random, alignment, roadFill }) {
+function buildSparseGatewayRoutes({ anchors, centroid, random, alignment, roadFill, obstacles = [], localPolygon = [] }) {
   const routes = [];
   const used = new Set();
   const routeLimit = Math.round(clamp(roadFill * 2.1, roadFill >= 0.55 ? 1 : 0, 2));
@@ -2000,6 +2229,11 @@ function buildSparseGatewayRoutes({ anchors, centroid, random, alignment, roadFi
       if (distance < 140 && roadFill < 0.86) {
         continue;
       }
+      // Never pair anchors that sit on opposite sides of a river/water body: the
+      // straight corridor between them would cross water and be split into stubs.
+      if (obstacles.length > 0 && lineIntersectsAnyPolygon([anchor.local, candidate.local], obstacles)) {
+        continue;
+      }
       const score = oppositePenalty * 2.8 - Math.min(distance, 1200) * 0.001 + highwayWeight(candidate.highway) * 0.22;
       if (!best || score < best.score) {
         best = { anchor: candidate, score, oppositePenalty };
@@ -2016,14 +2250,14 @@ function buildSparseGatewayRoutes({ anchors, centroid, random, alignment, roadFi
     routes.push({
       id: `${anchor.id}--${best.anchor.id}`,
       anchorIds: [anchor.id, best.anchor.id],
-      points: buildAlignedGatewayPath(anchor, best.anchor, centroid, random, alignment),
+      points: buildAlignedGatewayPath(anchor, best.anchor, centroid, random, alignment, obstacles, localPolygon),
     });
   }
 
   return routes;
 }
 
-function buildAlignedGatewayPath(a, b, centroid, random, alignment) {
+function buildAlignedGatewayPath(a, b, centroid, random, alignment, obstacles = [], localPolygon = []) {
   const straightness = clamp(alignment, 0, 1);
   const distance = distanceLocal(a.local, b.local);
   const shoulderLength = Math.min(160, distance * 0.28);
@@ -2042,20 +2276,26 @@ function buildAlignedGatewayPath(a, b, centroid, random, alignment) {
   const perpendicular = { x: -axis.y, y: axis.x };
   const wobble = clamp(distance * 0.08 * (1 - straightness), 0, 90);
   const coreOffset = randomRange(random, -wobble, wobble);
-  const corePoint = {
+  let corePoint = {
     x: core.x + perpendicular.x * coreOffset,
     y: core.y + perpendicular.y * coreOffset,
   };
+  // When the zone centroid is over water, the corridor bend can land on the
+  // river; pull it back onto dry land so the gateway stays buildable.
+  if (obstacles.length > 0 && pointInAnyPolygon(corePoint, obstacles)) {
+    corePoint = nearestInteriorPoint(corePoint, centroid, localPolygon, obstacles);
+  }
+
+  const aPrefix = anchorOutsidePrefix(a);
+  const bSuffix = anchorOutsideSuffix(b);
 
   if (straightness >= 0.78) {
-    return [a.leadIn, a.outside, a.local, aShoulder, corePoint, bShoulder, b.local, b.outside, b.leadIn];
+    return [...aPrefix, aShoulder, corePoint, bShoulder, ...bSuffix];
   }
 
   const bend = wobble * 0.55;
   return [
-    a.leadIn,
-    a.outside,
-    a.local,
+    ...aPrefix,
     aShoulder,
     {
       x: aShoulder.x + (corePoint.x - aShoulder.x) * 0.46 + perpendicular.x * randomRange(random, -bend, bend),
@@ -2067,13 +2307,26 @@ function buildAlignedGatewayPath(a, b, centroid, random, alignment) {
       y: corePoint.y + (bShoulder.y - corePoint.y) * 0.58 + perpendicular.y * randomRange(random, -bend, bend),
     },
     bShoulder,
-    b.local,
-    b.outside,
-    b.leadIn,
+    ...bSuffix,
   ];
 }
 
-function buildAlignedConnectorPath(anchor, target, centroid, random, alignment) {
+// Lead the path in from the real outside road geometry when available, else from
+// the synthetic lead-in. Prefix runs far -> boundary -> inside (anchor.local).
+function anchorOutsidePrefix(anchor) {
+  return anchor.outsideTrace?.length
+    ? [...anchor.outsideTrace, anchor.outside, anchor.local]
+    : [anchor.leadIn, anchor.outside, anchor.local];
+}
+
+// Mirror of anchorOutsidePrefix for the far end of a gateway: inside -> boundary -> far.
+function anchorOutsideSuffix(anchor) {
+  return anchor.outsideTrace?.length
+    ? [anchor.local, anchor.outside, ...anchor.outsideTrace.slice().reverse()]
+    : [anchor.local, anchor.outside, anchor.leadIn];
+}
+
+function buildAlignedConnectorPath(anchor, target, centroid, random, alignment, obstacles = [], localPolygon = []) {
   const straightness = clamp(alignment, 0, 1);
   const distance = distanceLocal(anchor.local, target);
   const shoulder = {
@@ -2086,16 +2339,21 @@ function buildAlignedConnectorPath(anchor, target, centroid, random, alignment) 
   const axis = normalizeVector({ x: target.x - anchor.local.x, y: target.y - anchor.local.y });
   const perpendicular = { x: -axis.y, y: axis.x };
   const bend = clamp(distance * 0.14 * (1 - straightness), 0, 76);
-  const corePoint = {
+  let corePoint = {
     x: core.x + perpendicular.x * randomRange(random, -bend, bend),
     y: core.y + perpendicular.y * randomRange(random, -bend, bend),
   };
-
-  if (straightness >= 0.82) {
-    return [anchor.leadIn, anchor.outside, anchor.local, shoulder, target];
+  if (obstacles.length > 0 && pointInAnyPolygon(corePoint, obstacles)) {
+    corePoint = nearestInteriorPoint(corePoint, centroid, localPolygon, obstacles);
   }
 
-  return [anchor.leadIn, anchor.outside, anchor.local, shoulder, corePoint, target];
+  const prefix = anchorOutsidePrefix(anchor);
+
+  if (straightness >= 0.82) {
+    return [...prefix, shoulder, target];
+  }
+
+  return [...prefix, shoulder, corePoint, target];
 }
 
 function anchorAngle(anchor, centroid) {
@@ -2586,8 +2844,44 @@ function pointInPolygonLoose(point, polygon, toleranceMeters) {
   return nearest && nearest.distance <= toleranceMeters;
 }
 
+function ensureObstacleBounds(obstacle) {
+  if (!obstacle._bounds) {
+    obstacle._bounds = localBounds(obstacle);
+  }
+  return obstacle._bounds;
+}
+
+function localBboxesOverlap(a, b, pad = 0) {
+  return (
+    a.minX - pad <= b.maxX + pad &&
+    a.maxX + pad >= b.minX - pad &&
+    a.minY - pad <= b.maxY + pad &&
+    a.maxY + pad >= b.minY - pad
+  );
+}
+
+function segmentLocalBbox(a, b, pad = 0) {
+  return {
+    minX: Math.min(a.x, b.x) - pad,
+    maxX: Math.max(a.x, b.x) + pad,
+    minY: Math.min(a.y, b.y) - pad,
+    maxY: Math.max(a.y, b.y) + pad,
+  };
+}
+
 function pointInAnyPolygon(point, polygons) {
-  return polygons.some((polygon) => pointInPolygonLoose(point, polygon, 0.4));
+  return polygons.some((polygon) => {
+    const bounds = ensureObstacleBounds(polygon);
+    if (
+      point.x < bounds.minX - 0.4 ||
+      point.x > bounds.maxX + 0.4 ||
+      point.y < bounds.minY - 0.4 ||
+      point.y > bounds.maxY + 0.4
+    ) {
+      return false;
+    }
+    return pointInPolygonLoose(point, polygon, 0.4);
+  });
 }
 
 function lineIntersectsAnyPolygon(points, polygons) {
@@ -2606,7 +2900,14 @@ function lineIntersectsAnyPolygon(points, polygons) {
 }
 
 function segmentIntersectsAnyPolygon(a, b, polygons) {
-  return polygons.some((polygon) => segmentIntersectsPolygon(a, b, polygon));
+  const segmentBounds = segmentLocalBbox(a, b, 0.2);
+  return polygons.some((polygon) => {
+    const bounds = ensureObstacleBounds(polygon);
+    if (!localBboxesOverlap(segmentBounds, bounds)) {
+      return false;
+    }
+    return segmentIntersectsPolygon(a, b, polygon);
+  });
 }
 
 function segmentIntersectsPolygon(a, b, polygon) {
@@ -2617,10 +2918,17 @@ function segmentIntersectsPolygon(a, b, polygon) {
 }
 
 function polygonIntersectsAnyPolygon(poly, polygons) {
-  if (polygons.length === 0) {
+  if (polygons.length === 0 || poly.length === 0) {
     return false;
   }
-  return polygons.some((obstacle) => polygonsIntersect(poly, obstacle));
+  const polyBounds = localBounds(poly);
+  return polygons.some((obstacle) => {
+    const bounds = ensureObstacleBounds(obstacle);
+    if (!localBboxesOverlap(polyBounds, bounds)) {
+      return false;
+    }
+    return polygonsIntersect(poly, obstacle);
+  });
 }
 
 function polygonsIntersect(a, b) {
@@ -2832,7 +3140,9 @@ function formatMetric(value, digits = 0) {
 }
 
 function destroy() {
-  window.clearTimeout(state.generationTimer);
+  if (state.generationRaf !== null) {
+    cancelAnimationFrame(state.generationRaf);
+  }
   window.clearTimeout(state.contextTimer);
   window.clearTimeout(state.toastTimer);
   state.contextFetchController?.abort();
