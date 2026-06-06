@@ -71,6 +71,25 @@ Force re-download:
 python3 setup_london_mapped_data.py --force
 ```
 
+## Export/Rebuild Commands
+
+Do not run `python3 -m london_mapped_data.export ...` directly from this folder before installing the downloaded package. Use the wrapper instead:
+
+```bash
+cd backend/data_sources
+python3 export_london_mapped_data.py --help
+```
+
+Example:
+
+```bash
+python3 export_london_mapped_data.py build-db \
+  --source /absolute/path/to/london_datastore.sqlite3 \
+  --out london_mapped_data_package/data/london_mapped_compact.sqlite3
+```
+
+On the VPS you usually do not need `build-db`; the public R2 bundle already contains the compact SQLite database.
+
 ## Notes
 
 - Coordinates must be WGS84 latitude/longitude.
