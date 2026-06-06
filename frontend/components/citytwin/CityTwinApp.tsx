@@ -10,6 +10,7 @@ import type {
   CityTwinHandle,
   CityTwinMetrics,
   CityTwinPills,
+  CityTwinPopulation,
   CityTwinSettingKey,
   CityTwinSettings,
 } from "@/lib/cityTwinMap";
@@ -17,6 +18,7 @@ import { ControlsCard } from "./ControlsCard";
 import { DashboardCard } from "./DashboardCard";
 import { IntroCard } from "./IntroCard";
 import { LegendCard } from "./LegendCard";
+import { PopulationCard } from "./PopulationCard";
 import { StatusCard } from "./StatusCard";
 
 const DEFAULT_SETTINGS: CityTwinSettings = {
@@ -43,6 +45,7 @@ export function CityTwinApp() {
     anchors: 0,
   });
   const [metrics, setMetrics] = useState<CityTwinMetrics | null>(null);
+  const [population, setPopulation] = useState<CityTwinPopulation | null>(null);
   const [scenario, setScenario] = useState("No scenario yet");
   const [report, setReport] = useState("Loading the demo zone…");
   const [hint, setHint] = useState(
@@ -69,6 +72,7 @@ export function CityTwinApp() {
           setStatus(text);
         },
         onMetrics: setMetrics,
+        onPopulation: setPopulation,
         onScenario: setScenario,
         onReport: setReport,
         onHint: setHint,
@@ -133,6 +137,7 @@ export function CityTwinApp() {
           onFit={() => handleRef.current?.fit()}
         />
         <LegendCard />
+        <PopulationCard population={population} />
         <DashboardCard scenario={scenario} metrics={metrics} report={report} />
       </div>
 

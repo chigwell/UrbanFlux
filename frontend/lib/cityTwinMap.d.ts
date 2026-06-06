@@ -47,6 +47,16 @@ export interface CityTwinPills {
   anchors: number;
 }
 
+/** Approximate population for the selected area, fetched from the backend. */
+export interface CityTwinPopulation {
+  status: "loading" | "ready" | "error";
+  /** Formatted count, e.g. "12,480". Present when `status` is "ready". */
+  population?: string;
+  lsoaCount?: number;
+  areaKm2?: number;
+  note?: string;
+}
+
 export interface CityTwinOptions {
   /** Element id string or the element itself for the MapLibre container. */
   container: string | HTMLElement;
@@ -65,6 +75,8 @@ export interface CityTwinOptions {
   onHint?: (text: string) => void;
   /** Live context counts (existing roads / water masks / boundary anchors). */
   onPills?: (pills: CityTwinPills) => void;
+  /** Approximate population for the selected area; `null` clears it. */
+  onPopulation?: (population: CityTwinPopulation | null) => void;
   /** Transient toast message. */
   onToast?: (text: string) => void;
 }

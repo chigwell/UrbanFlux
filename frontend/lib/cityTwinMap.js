@@ -55,6 +55,11 @@ const CONTEXT_FETCH_DEBOUNCE_MS = 520;
 // which removed the river masks and let the plan build over the Thames.
 const CONTEXT_KIND_BUDGETS = { road: 1200, water: 500, building: 600, park: 250 };
 const WATER_CONTEXT_READY_STATES = new Set(["vector", "osm", "partial"]);
+// Backend that estimates population for the selected polygon. Overridable at
+// build time (NEXT_PUBLIC_* is inlined by Next, even with output: "export").
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL || "https://api.urbanflux.london";
+const POPULATION_FETCH_DEBOUNCE_MS = 600;
 
 
 export function initCityTwinMap(options = {}) {
@@ -68,6 +73,7 @@ const emit = {
   onReport: options.onReport || noop,
   onHint: options.onHint || noop,
   onPills: options.onPills || noop,
+  onPopulation: options.onPopulation || noop,
   onToast: options.onToast || noop,
 };
 
@@ -94,6 +100,9 @@ const state = {
   overpassEndpointIndex: 0,
   generationRaf: null,
   contextTimer: null,
+  populationTimer: null,
+  populationController: null,
+  populationKey: "",
   statsCache: null,
   contextCache: new Map(),
   overpassCooldownUntil: 0,
@@ -523,6 +532,7 @@ function addVertex(coord) {
   updateSelectionSource();
   scheduleGeneration();
   scheduleContextFetch();
+  schedulePopulationFetch();
 }
 
 function undoVertex() {
@@ -534,6 +544,7 @@ function undoVertex() {
   updateSelectionSource();
   scheduleGeneration();
   scheduleContextFetch();
+  schedulePopulationFetch();
 }
 
 function clearZone() {
@@ -547,6 +558,7 @@ function clearZone() {
   setSourceData("context", EMPTY);
   setSourceData("generated", EMPTY);
   updateMetrics(null);
+  clearPopulation();
   setStatus(20, "Zone cleared. Click four or more points to start a new scenario.");
 }
 
@@ -562,6 +574,7 @@ function loadDemoZone(showMessage = false) {
   updateSelectionSource();
   fitToZone({ animated: showMessage });
   queueInitialContextFetch();
+  schedulePopulationFetch();
   if (showMessage) {
     showToast("Demo zone restored. Water override is off by default, so mapped rivers are excluded from generation.");
   }
@@ -622,6 +635,7 @@ function renderVertexMarkers() {
       renderVertexMarkers();
       scheduleGeneration();
       scheduleContextFetch();
+      schedulePopulationFetch();
     });
 
     element.addEventListener("dblclick", (event) => {
@@ -665,6 +679,7 @@ function renderMidpointMarkersOnly() {
       updateSelectionSource();
       scheduleGeneration();
       scheduleContextFetch();
+      schedulePopulationFetch();
     });
     const marker = new maplibregl.Marker({ element, anchor: "center" }).setLngLat(coord).addTo(map);
     state.midpointMarkers.push(marker);
@@ -681,6 +696,7 @@ function removeVertex(index) {
   updateSelectionSource();
   scheduleGeneration();
   scheduleContextFetch();
+  schedulePopulationFetch();
 }
 
 function midpointLngLat(a, b) {
@@ -705,6 +721,76 @@ function polygonFeature(vertices) {
     properties: { kind: "selection" },
     geometry: { type: "Polygon", coordinates: [closed] },
   };
+}
+
+function verticesKey(vertices) {
+  return vertices
+    .map((coord) => `${coord[0].toFixed(5)},${coord[1].toFixed(5)}`)
+    .join("|");
+}
+
+function schedulePopulationFetch() {
+  if (state.vertices.length < MIN_POLYGON_VERTICES) {
+    return;
+  }
+  window.clearTimeout(state.populationTimer);
+  state.populationTimer = window.setTimeout(fetchPopulation, POPULATION_FETCH_DEBOUNCE_MS);
+}
+
+function clearPopulation() {
+  window.clearTimeout(state.populationTimer);
+  state.populationController?.abort();
+  state.populationController = null;
+  state.populationKey = "";
+  emit.onPopulation(null);
+}
+
+async function fetchPopulation() {
+  if (state.vertices.length < MIN_POLYGON_VERTICES) {
+    return;
+  }
+  // The estimate depends only on the polygon, so skip refetching an unchanged shape.
+  const key = verticesKey(state.vertices);
+  if (key === state.populationKey) {
+    return;
+  }
+
+  state.populationController?.abort();
+  const controller = new AbortController();
+  state.populationController = controller;
+  emit.onPopulation({ status: "loading" });
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/population`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ polygon: polygonFeature(state.vertices).geometry }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Population request failed: ${response.status}`);
+    }
+    const data = await response.json();
+    state.populationKey = key;
+    emit.onPopulation({
+      status: "ready",
+      population: Number(data.approximate_population).toLocaleString(),
+      lsoaCount: data.lsoa_count,
+      areaKm2: data.area_km2,
+      note: data.note,
+    });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      return;
+    }
+    // Surface the failure (the card shows an error) and allow a later retry.
+    state.populationKey = "";
+    emit.onPopulation({ status: "error" });
+  } finally {
+    if (state.populationController === controller) {
+      state.populationController = null;
+    }
+  }
 }
 
 function scheduleGeneration() {
@@ -3303,7 +3389,9 @@ function destroy() {
   }
   window.clearTimeout(state.contextTimer);
   window.clearTimeout(state.toastTimer);
+  window.clearTimeout(state.populationTimer);
   state.contextFetchController?.abort();
+  state.populationController?.abort();
   for (const marker of state.vertexMarkers) {
     marker.remove();
   }
