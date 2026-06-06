@@ -2534,6 +2534,14 @@ out body geom qt;
         return;
       }
 
+      if (
+        options.allowExisting === true &&
+        state.lastSuccessfulRenderFeatureCount >= minGeneratedFeatures
+      ) {
+        resolve(true);
+        return;
+      }
+
       let settled = false;
 
       const cleanup = () => {

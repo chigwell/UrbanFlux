@@ -258,9 +258,12 @@ export function CityTwinApp() {
         signal,
         timeoutMs: AUTO_TIMING.waitForInitialPlanTimeoutMs,
         minGeneratedFeatures: 3,
+        allowExisting: true,
       });
 
       if (!rendered) {
+        setProgress(30);
+        setStatus("Trying another neighbourhood with richer map context...");
         setAutoMode("selecting");
         await handle.pickAutoImprovementZone({ signal, reveal: true });
         setAutoMode("waiting-initial-plan");
@@ -268,6 +271,7 @@ export function CityTwinApp() {
           signal,
           timeoutMs: AUTO_TIMING.waitForInitialPlanTimeoutMs,
           minGeneratedFeatures: 3,
+          allowExisting: true,
         });
       }
 
