@@ -35,14 +35,15 @@ export function DashboardCard({
   return (
     <CollapsiblePanel title="Impact dashboard" meta={scenario}>
       <div className="flex flex-col gap-4">
-        <p className="text-sm leading-relaxed text-muted-foreground">{report}</p>
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          {report}
+        </p>
         <div className="grid grid-cols-2 gap-2">
           {tiles.map((tile) => (
-            <div
-              key={tile.label}
-              className=" border-[0.5px] bg-muted/30 p-3"
-            >
-              <span className="text-xs text-muted-foreground">{tile.label}</span>
+            <div key={tile.label} className=" border-[0.5px] bg-muted/30 p-3">
+              <span className="text-xs text-muted-foreground">
+                {tile.label}
+              </span>
               <span className="mt-1 block text-base font-medium tabular-nums">
                 {tile.value}
               </span>
@@ -133,9 +134,9 @@ function ImpactMetrics({ impact }: { impact: CityTwinImpact | null }) {
               );
             })}
           </div>
-          {impact.note ? (
+          {/* {impact.note ? (
             <p className="text-xs text-muted-foreground">{impact.note}</p>
-          ) : null}
+          ) : null} */}
         </>
       ) : (
         <p className="text-sm text-muted-foreground">
