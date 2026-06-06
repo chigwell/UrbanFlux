@@ -79,6 +79,19 @@ export function ExpandableScreen({
     }
   }, [isExpanded, lockScroll])
 
+  useEffect(() => {
+    if (!isExpanded) {
+      return
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        collapse()
+      }
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [isExpanded])
+
   return (
     <ExpandableScreenContext.Provider
       value={{
