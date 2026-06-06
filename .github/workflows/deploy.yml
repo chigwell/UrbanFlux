@@ -93,6 +93,7 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_SSH_PORT || '22' }}
+          FAL_KEY: ${{ secrets.FAL_KEY }}
         run: |
           rsync -az --delete \
             --exclude ".venv" \
@@ -112,6 +113,7 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_SSH_PORT || '22' }}
           BACKEND_SERVICE: ${{ secrets.VPS_SERVICE_NAME || 'urbanflux-backend' }}
+          FAL_KEY: ${{ secrets.FAL_KEY }}
         run: |
           ssh -i ~/.ssh/urbanflux_deploy_key -p "${VPS_PORT}" -o StrictHostKeyChecking=no \
             -o BatchMode=yes -o IdentitiesOnly=yes \
