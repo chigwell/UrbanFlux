@@ -28,7 +28,7 @@ export function CollapsiblePanel({
       defaultOpen={defaultOpen}
       className={cn("group bg-card text-card-foreground shadow-xs", className)}
     >
-      <CollapsibleTrigger className="flex w-full min-h-11 cursor-pointer items-center justify-between gap-3 border-[0.5px] px-4 py-3 text-left transition-colors hover:bg-muted/40">
+      <CollapsibleTrigger className="flex w-full min-h-11 cursor-pointer items-center justify-between gap-3 border-[0.5px] px-4 py-3 text-left transition-colors hover:bg-muted">
         <span className="text-sm font-medium">{title}</span>
         <div className="flex min-w-0 items-center gap-2">
           {meta ? (
