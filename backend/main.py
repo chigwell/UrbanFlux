@@ -482,19 +482,19 @@ def _compute_impact_metrics(
             improved_metric="Local summer heat exposure",
             improved_value=f"-{cooling_c} °C",
             delta=f"-{cooling_c} °C local heat proxy vs low-greening scenario",
-            source="https://www.london.gov.uk/programmes-strategies/environment-and-climate-change/climate-change/urban-greening",
+            source="https://www.london.gov.uk/programmes-strategies/environment-and-climate-change/parks-green-spaces-and-biodiversity/urban-greening",
         ),
         ImpactMetric(
             improved_metric="Productive land released from parking",
             improved_value=f"+{productive_land_gain_pct}%",
             delta=f"+{productive_land_gain_pct}% vs maximum parking pressure",
-            source="https://data.london.gov.uk/dataset/car-parking-and-london-s-available-space",
+            source="https://www.london.gov.uk/programmes-strategies/planning/london-plan/the-london-plan-2021-online/chapter-10-transport",
         ),
         ImpactMetric(
             improved_metric="Premature deaths prevented (active travel)",
             improved_value=f"{lives_saved_per_year} lives/year",
             delta=f"+{lives_saved_per_year} vs baseline",
-            source="https://www.euro.who.int/en/health-topics/environment-and-health/Transport-and-health/activities/quantifying-health-impacts-of-transport/heat-tool",
+            source="https://www.who.int/tools/heat-for-walking-and-cycling",
         ),
     ]
 

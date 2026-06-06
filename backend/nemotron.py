@@ -264,13 +264,13 @@ EXAMPLE_IMPACT_RESPONSE = {
             "improved_metric": "Productive land released from parking",
             "improved_value": "+7.8%",
             "delta": "+7.8% vs maximum parking pressure",
-            "source": "https://data.london.gov.uk/dataset/car-parking-and-london-s-available-space",
+            "source": "https://www.london.gov.uk/programmes-strategies/planning/london-plan/the-london-plan-2021-online/chapter-10-transport",
         },
         {
             "improved_metric": "Summer peak temperature",
             "improved_value": "-0.75 °C",
             "delta": "-0.75 °C vs no green space change",
-            "source": "https://www.london.gov.uk/programmes-strategies/environment-and-climate-change/climate-change/urban-greening",
+            "source": "https://www.london.gov.uk/programmes-strategies/environment-and-climate-change/parks-green-spaces-and-biodiversity/urban-greening",
         },
         {
             "improved_metric": "Mental health prevalence",
@@ -282,7 +282,7 @@ EXAMPLE_IMPACT_RESPONSE = {
             "improved_metric": "Premature deaths prevented (active travel)",
             "improved_value": "2.0 lives/year",
             "delta": "+2.0 vs baseline",
-            "source": "https://www.euro.who.int/en/health-topics/environment-and-health/Transport-and-health/activities/quantifying-health-impacts-of-transport/heat-tool",
+            "source": "https://www.who.int/tools/heat-for-walking-and-cycling",
         },
         {
             "improved_metric": "Estimated population affected",
