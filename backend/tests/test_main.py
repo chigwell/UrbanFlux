@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sys
+import types
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -218,7 +220,7 @@ def test_nemotron_prompt_restricts_sources_and_weather_claims() -> None:
     assert "Never describe it as citywide weather" in prompt
 
 
-def test_validate_metric_sources_preserves_allowed_live_source(monkeypatch) -> None:
+def test_validate_metric_sources_preserves_allowed_source() -> None:
     source = "https://data.london.gov.uk/dataset/example/"
     metric = main.ImpactMetric(
         improved_metric="Housing capacity",
@@ -226,28 +228,26 @@ def test_validate_metric_sources_preserves_allowed_live_source(monkeypatch) -> N
         delta="+1% vs baseline",
         source=source,
     )
-    monkeypatch.setattr(main, "_source_url_is_live", lambda url: True)
 
     validated = main._validate_metric_sources([metric], {source})
 
     assert validated[0].source == source
 
 
-def test_validate_metric_sources_blanks_unlisted_source(monkeypatch) -> None:
+def test_validate_metric_sources_blanks_unlisted_source() -> None:
     metric = main.ImpactMetric(
         improved_metric="Housing capacity",
         improved_value="+1%",
         delta="+1% vs baseline",
         source="https://invented.example/source",
     )
-    monkeypatch.setattr(main, "_source_url_is_live", lambda url: True)
 
     validated = main._validate_metric_sources([metric], {"https://data.london.gov.uk/dataset/example/"})
 
     assert validated[0].source == ""
 
 
-def test_validate_metric_sources_preserves_allowed_source_without_live_check(monkeypatch) -> None:
+def test_validate_metric_sources_preserves_allowed_source_without_live_check() -> None:
     source = "https://data.london.gov.uk/dataset/example/"
     metric = main.ImpactMetric(
         improved_metric="Housing capacity",
@@ -260,20 +260,204 @@ def test_validate_metric_sources_preserves_allowed_source_without_live_check(mon
     assert validated[0].source == source
 
 
-def test_validate_metric_sources_skips_empty_source(monkeypatch) -> None:
-    calls = []
+def test_validate_metric_sources_keeps_empty_source_empty() -> None:
     metric = main.ImpactMetric(
         improved_metric="Housing capacity",
         improved_value="+1%",
         delta="+1% vs baseline",
         source="",
     )
-    monkeypatch.setattr(main, "_source_url_is_live", lambda url: calls.append(url) or True)
 
     validated = main._validate_metric_sources([metric], {"https://data.london.gov.uk/dataset/example/"})
 
     assert validated[0].source == ""
-    assert calls == []
+
+
+def test_lsoa_paths_are_backend_relative(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    assert main._LSOA_BOUNDARIES_PATH.is_absolute()
+    assert main._POPULATION_JSON_PATH.is_absolute()
+    assert main._LSOA_BOUNDARIES_PATH.parent == BACKEND_DIR
+    assert main._POPULATION_JSON_PATH.parent == BACKEND_DIR
+
+
+def test_fetch_borough_context_filters_to_trusted_themes(monkeypatch) -> None:
+    housing_source = "https://data.london.gov.uk/dataset/housing-data/"
+    transport_source = "https://data.london.gov.uk/download/transport.csv"
+    safety_source = "https://data.london.gov.uk/dataset/safety-data/"
+
+    def fake_borough_data_response(lat: float, lon: float, top_datasets_limit: int):
+        assert lat == 51.5074
+        assert lon == -0.1278
+        assert top_datasets_limit == 30
+        return {
+            "borough": {"name": "Westminster"},
+            "latest_rows_by_theme": [
+                {
+                    "theme": "housing",
+                    "dataset_title": "Housing data",
+                    "source_url": housing_source,
+                    "source_row_preview": "homes: 10",
+                    "date_start": "2024-01-01",
+                },
+                {
+                    "theme": "transport",
+                    "dataset_title": "Transport data",
+                    "source_url": "https://example.com/not-london",
+                    "csv_url": transport_source,
+                    "source_row_preview": "cycle: 2",
+                    "date_start": "2024-02-01",
+                },
+                {
+                    "theme": "safety",
+                    "dataset_title": "Safety data",
+                    "source_url": safety_source,
+                    "source_row_preview": "crime: 3",
+                    "date_start": "2024-03-01",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(main, "build_borough_data_test_response", fake_borough_data_response)
+
+    borough_name, rows_by_theme, borough_rows, allowed_sources = main._fetch_borough_context(51.5074, -0.1278)
+
+    assert borough_name == "Westminster"
+    assert set(rows_by_theme) == {"housing", "transport"}
+    assert "[safety]" not in borough_rows
+    assert housing_source in allowed_sources
+    assert transport_source in allowed_sources
+    assert safety_source not in allowed_sources
+
+
+def test_fetch_borough_context_handles_missing_borough(monkeypatch) -> None:
+    monkeypatch.setattr(
+        main,
+        "build_borough_data_test_response",
+        lambda lat, lon, top_datasets_limit: {"borough": None, "latest_rows_by_theme": []},
+    )
+
+    assert main._fetch_borough_context(51.5074, -0.1278) == ("", {}, "", set())
+
+
+def test_call_nemotron_returns_none_without_fal_key(monkeypatch) -> None:
+    monkeypatch.delenv("FAL_KEY", raising=False)
+
+    assert main._call_nemotron("prompt") is None
+
+
+def test_call_nemotron_parses_valid_json(monkeypatch) -> None:
+    source = "https://data.london.gov.uk/dataset/example/"
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    monkeypatch.setitem(
+        sys.modules,
+        "fal_client",
+        types.SimpleNamespace(
+            subscribe=lambda *args, **kwargs: {
+                "output": json.dumps(
+                    [
+                        {
+                            "improved_metric": "Housing capacity",
+                            "improved_value": "+1%",
+                            "delta": "+1% vs baseline",
+                            "source": source,
+                            "methodology_source": "",
+                            "basis": "Mapped data",
+                        }
+                    ]
+                )
+            }
+        ),
+    )
+
+    metrics = main._call_nemotron("prompt")
+
+    assert metrics is not None
+    assert metrics[0].improved_metric == "Housing capacity"
+    assert metrics[0].source == source
+
+
+def test_call_nemotron_returns_none_for_invalid_json(monkeypatch) -> None:
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    monkeypatch.setitem(
+        sys.modules,
+        "fal_client",
+        types.SimpleNamespace(subscribe=lambda *args, **kwargs: {"output": "not json"}),
+    )
+
+    assert main._call_nemotron("prompt") is None
+
+
+def test_nemotron_impact_metrics_falls_back_when_unavailable(monkeypatch) -> None:
+    source = "https://data.london.gov.uk/dataset/example/"
+    london_metrics = [
+        main.ImpactMetric(
+            improved_metric="Housing capacity",
+            improved_value="+1%",
+            delta="+1% vs baseline",
+            source=source,
+        )
+    ]
+    monkeypatch.setattr(main, "_call_nemotron", lambda prompt: None)
+
+    metrics, note = main._nemotron_impact_metrics(
+        population=2480,
+        area_km2=0.42,
+        params=main.ReplanningParams(),
+        london_metrics=london_metrics,
+        borough_name="Westminster",
+        borough_rows="Borough: Westminster",
+        borough_sources={source},
+    )
+
+    assert metrics == london_metrics
+    assert note == "London Datastore mapped estimates for Westminster"
+
+
+def test_nemotron_impact_metrics_blanks_unallowed_refined_sources(monkeypatch) -> None:
+    allowed_source = "https://data.london.gov.uk/dataset/example/"
+    london_metrics = [
+        main.ImpactMetric(
+            improved_metric="Housing capacity",
+            improved_value="+1%",
+            delta="+1% vs baseline",
+            source=allowed_source,
+        )
+    ]
+
+    monkeypatch.setattr(
+        main,
+        "_call_nemotron",
+        lambda prompt: [
+            main.ImpactMetric(
+                improved_metric="Housing capacity",
+                improved_value="+2%",
+                delta="+2% vs baseline",
+                source=allowed_source,
+            ),
+            main.ImpactMetric(
+                improved_metric="Invented",
+                improved_value="99",
+                delta="99",
+                source="https://invented.example/source",
+            ),
+        ],
+    )
+
+    metrics, note = main._nemotron_impact_metrics(
+        population=2480,
+        area_km2=0.42,
+        params=main.ReplanningParams(),
+        london_metrics=london_metrics,
+        borough_name="Westminster",
+        borough_rows="Borough: Westminster",
+        borough_sources={allowed_source},
+    )
+
+    assert note == "Refined by Nvidia Nemotron using real Westminster data"
+    assert metrics[0].source == allowed_source
+    assert metrics[1].source == ""
 
 
 def test_latest_theme_row_includes_source_links() -> None:
