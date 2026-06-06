@@ -16,7 +16,7 @@ export function Hero() {
 
         <p className="mt-6 max-w-xl text-lg leading-8 text-muted-foreground text-pretty">
           Draw any boundary over London and UrbanFlux generates a water-aware
-          regeneration plan — roads, buildings, green space and live impact
+          regeneration plan - roads, buildings, green space and live impact
           metrics. Entirely in your browser.
         </p>
 
