@@ -1,4 +1,6 @@
-# UrbanFlux
+<div align="center">
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&height=200&section=header&text=UrbanFlux&fontSize=50&fontAlignY=35&animation=fadeIn&fontColor=FFFFFF&descAlignY=55&descAlign=62" alt="UrbanFlux" width="100%" />
+</div>
 
 UrbanFlux is a Next.js CityTwin map frontend with a FastAPI backend.
 
