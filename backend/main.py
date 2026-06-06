@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.request
+import urllib.parse
 from functools import lru_cache
 from typing import Any
 
@@ -32,17 +34,53 @@ app.add_middleware(
 # Pre-built LSOA GeoJSON with population joined.
 # Source: ONS LSOA Dec-2021 boundaries (BSC simplified) + Census 2021 TS001.
 # Fallback: we reconstruct from the two raw sources on first call.
-_LSOA_GEOJSON_URL = (
+# ---------------------------------------------------------------------------
+# LSOA data loader  (cached – loaded once per process lifetime)
+# ---------------------------------------------------------------------------
+
+_LSOA_BOUNDARIES_PATH = "london-lsoa-boundaries.geojson"
+_POPULATION_JSON_PATH = "london-lsoa-population.json"
+
+# Fallback remote URL if local boundaries file is absent.
+# Paginated: ArcGIS caps at 2000 features per request.
+_ARCGIS_BASE_URL = (
     "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/"
     "Lower_layer_Super_Output_Areas_December_2021_Boundaries_EW_BSC_V4/"
     "FeatureServer/0/query"
-    "?where=MSOA21NM+LIKE+'%25London%25'&outFields=LSOA21CD,LSOA21NM"
-    "&returnGeometry=true&f=geojson&resultRecordCount=5000"
 )
+_LONDON_BBOX = "-0.5103751,51.2867602,0.3340155,51.6918741"
 
-# Population lookup shipped with the repo (generated 2026-06-05).
-# Shape: {"E01000001": 1432, "E01000002": 987, ...}
-_POPULATION_JSON_PATH = "london-lsoa-population.json"
+
+def _fetch_arcgis_features() -> list[dict]:
+    """Paginate through ArcGIS to fetch all London LSOA boundary features."""
+    import urllib.parse
+    all_features: list[dict] = []
+    offset = 0
+    page_size = 2000
+    while True:
+        params = urllib.parse.urlencode({
+            "geometry": _LONDON_BBOX,
+            "geometryType": "esriGeometryEnvelope",
+            "inSR": "4326",
+            "spatialRel": "esriSpatialRelIntersects",
+            "outFields": "LSOA21CD",
+            "returnGeometry": "true",
+            "f": "geojson",
+            "resultRecordCount": page_size,
+            "resultOffset": offset,
+        })
+        url = f"{_ARCGIS_BASE_URL}?{params}"
+        try:
+            with urllib.request.urlopen(url, timeout=60) as resp:
+                page = json.loads(resp.read())
+        except Exception as exc:
+            raise RuntimeError(f"Failed to fetch LSOA boundaries from ArcGIS: {exc}") from exc
+        features = page.get("features", [])
+        all_features.extend(features)
+        if not page.get("exceededTransferLimit") or len(features) == 0:
+            break
+        offset += page_size
+    return all_features
 
 
 @lru_cache(maxsize=1)
@@ -53,7 +91,8 @@ def _load_lsoa_features() -> list[dict]:
 
     Priority:
     1. data_sources package (Eugene's work – imported if available)
-    2. Local population JSON + remote boundary GeoJSON
+    2. Local london-lsoa-boundaries.geojson + london-lsoa-population.json
+    3. Remote ArcGIS fetch (slow first call; cached thereafter)
     """
 
     # Hook for Eugene's data_sources package
@@ -63,22 +102,23 @@ def _load_lsoa_features() -> list[dict]:
     except (ImportError, AttributeError):
         pass
 
-    # --- fallback: load population JSON bundled with the repo ---------------
+    # --- load population lookup -----------------------------------------------
     try:
         with open(_POPULATION_JSON_PATH) as fh:
             pop_lookup: dict[str, int] = json.load(fh)
     except FileNotFoundError:
         pop_lookup = {}
 
-    # --- fetch boundaries from ArcGIS ----------------------------------------
-    try:
-        with urllib.request.urlopen(_LSOA_GEOJSON_URL, timeout=30) as resp:
-            gj = json.loads(resp.read())
-    except Exception as exc:
-        raise RuntimeError(f"Failed to fetch LSOA boundaries: {exc}") from exc
+    # --- load boundaries (local file preferred, ArcGIS fallback) --------------
+    if os.path.exists(_LSOA_BOUNDARIES_PATH):
+        with open(_LSOA_BOUNDARIES_PATH) as fh:
+            gj = json.load(fh)
+        raw_features = gj.get("features", [])
+    else:
+        raw_features = _fetch_arcgis_features()
 
     features = []
-    for feat in gj.get("features", []):
+    for feat in raw_features:
         code = feat["properties"].get("LSOA21CD", "")
         population = pop_lookup.get(code, 0)
         try:
