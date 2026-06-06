@@ -58,7 +58,7 @@ Detailed notes:
   - avoid replanning over rivers and water bodies;
   - investigate the River Thames case, where water skipping only partly works;
   - do not spend too much time if the Thames fix becomes complex.
-- [ ] Send selected-area coordinates from the frontend to the backend and display the returned approximate population for that area.
+- [x] Send selected-area coordinates from the frontend to the backend and display the returned approximate population for that area.
   - Sync with David on the API contract.
 - [ ] Send selected-area coordinates plus selected replanning UI parameters to the backend and display returned impact calculations.
   - Expected response shape:
