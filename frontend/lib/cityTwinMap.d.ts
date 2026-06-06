@@ -32,6 +32,7 @@ export interface WaitForPlanOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   minGeneratedFeatures?: number;
+  allowExisting?: boolean;
 }
 
 export interface ReplanningParams {
