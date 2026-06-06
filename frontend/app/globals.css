@@ -208,6 +208,61 @@
   .uf-float {
     animation: uf-float 7s ease-in-out infinite;
   }
+
+  .uf-impact-loader {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .uf-impact-loader::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(90deg, transparent, color-mix(in oklch, var(--foreground) 8%, transparent), transparent),
+      linear-gradient(135deg, color-mix(in oklch, var(--uf-accent) 8%, transparent), transparent 45%);
+    transform: translateX(-100%);
+    animation: uf-impact-sheen 1.9s ease-in-out infinite;
+    pointer-events: none;
+  }
+
+  .uf-impact-loader-mark {
+    position: relative;
+    display: grid;
+    width: 2.35rem;
+    height: 2.35rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.25rem;
+    flex: none;
+  }
+
+  .uf-impact-loader-mark span {
+    border: 1px solid color-mix(in oklch, var(--foreground) 18%, transparent);
+    background: color-mix(in oklch, var(--card) 84%, transparent);
+    animation: uf-impact-tile 1.4s ease-in-out infinite;
+  }
+
+  .uf-impact-loader-mark span:nth-child(2) {
+    animation-delay: 120ms;
+  }
+
+  .uf-impact-loader-mark span:nth-child(3) {
+    animation-delay: 240ms;
+  }
+
+  .uf-impact-loader-mark span:nth-child(4) {
+    animation-delay: 360ms;
+  }
+
+  .uf-impact-loader-scan {
+    background: linear-gradient(90deg, transparent, var(--foreground), transparent);
+    animation: uf-impact-scan 1.25s cubic-bezier(0.7, 0, 0.25, 1) infinite;
+  }
+
+  .uf-impact-loader-dots::after {
+    content: "";
+    animation: uf-impact-dots 1.2s steps(4, end) infinite;
+  }
 }
 
 @keyframes uf-enter {
@@ -230,9 +285,62 @@
   }
 }
 
+@keyframes uf-impact-sheen {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  30%, 70% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+@keyframes uf-impact-tile {
+  0%, 100% {
+    transform: scale(1);
+    background: color-mix(in oklch, var(--card) 84%, transparent);
+  }
+  45% {
+    transform: scale(0.72);
+    background: var(--foreground);
+  }
+}
+
+@keyframes uf-impact-scan {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(220%);
+  }
+}
+
+@keyframes uf-impact-dots {
+  0% {
+    content: "";
+  }
+  25% {
+    content: ".";
+  }
+  50% {
+    content: "..";
+  }
+  75%, 100% {
+    content: "...";
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .uf-enter,
-  .uf-float {
+  .uf-float,
+  .uf-impact-loader::before,
+  .uf-impact-loader-mark span,
+  .uf-impact-loader-scan,
+  .uf-impact-loader-dots::after {
     animation: none;
   }
 }
