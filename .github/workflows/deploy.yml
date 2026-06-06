@@ -71,6 +71,8 @@ jobs:
             --exclude ".pytest_cache" \
             --exclude ".mypy_cache" \
             --exclude ".git" \
+            --exclude "data_sources/.cache" \
+            --exclude "data_sources/london_mapped_data_package/data/london_mapped_compact.sqlite3" \
             -e "ssh -i ~/.ssh/urbanflux_deploy_key -p ${VPS_PORT} -o StrictHostKeyChecking=no -o BatchMode=yes -o IdentitiesOnly=yes" \
             backend/ \
             ${VPS_USER}@${VPS_HOST}:/opt/urbanflux/backend/
@@ -100,6 +102,11 @@ jobs:
           . .venv/bin/activate
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+          if [ ! -f "data_sources/london_mapped_data_package/data/london_mapped_compact.sqlite3" ]; then
+            python data_sources/setup_london_mapped_data.py
+          fi
+
           sudo -n systemctl daemon-reload
           sudo -n systemctl restart "${SERVICE_NAME}"
           sudo -n systemctl --no-pager status "${SERVICE_NAME}"
