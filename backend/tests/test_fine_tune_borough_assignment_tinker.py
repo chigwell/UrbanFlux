@@ -68,20 +68,34 @@ def test_dry_run_does_not_require_tinker_imports_or_api_key(monkeypatch, tmp_pat
 
     args = argparse.Namespace(
         dataset=dataset,
-        base_model="Qwen/Qwen3.5-4B",
-        renderer="qwen3_5",
+        base_model=ft.DEFAULT_BASE_MODEL,
+        renderer=ft.DEFAULT_RENDERER,
         checkpoint_name="test-checkpoint",
         rank=16,
-        learning_rate=0.0002,
-        batch_size=8,
+        learning_rate=0.0001,
+        batch_size=2,
         epochs=1,
         max_steps=None,
         max_examples=None,
-        max_length=2048,
+        max_length=4096,
         dry_run=True,
     )
 
     assert ft.asyncio.run(ft.train(args)) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["records"] == 1
-    assert payload["base_model"] == "Qwen/Qwen3.5-4B"
+    assert payload["base_model"] == "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+    assert payload["renderer"] == "nemotron3_disable_thinking"
+    assert payload["batch_size"] == 2
+    assert payload["learning_rate"] == 0.0001
+    assert payload["max_length"] == 4096
+
+
+def test_parse_args_defaults_to_nemotron3_disable_thinking() -> None:
+    args = ft.parse_args([])
+
+    assert args.base_model == "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+    assert args.renderer == "nemotron3_disable_thinking"
+    assert args.batch_size == 2
+    assert args.learning_rate == 0.0001
+    assert args.max_length == 4096

@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover - requirements install provides tqdm.
 
 DEFAULT_DATASET_PATH = Path(__file__).resolve().with_name("urbanflux_borough_assignment_training.jsonl")
 DEFAULT_BASE_MODEL = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
-DEFAULT_RENDERER = "qwen3_5"
+DEFAULT_RENDERER = "nemotron3_disable_thinking"
 DEFAULT_CHECKPOINT_NAME = "urbanflux-borough-assignment"
 
 
@@ -282,12 +282,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--renderer", default=DEFAULT_RENDERER)
     parser.add_argument("--checkpoint-name", default=DEFAULT_CHECKPOINT_NAME)
     parser.add_argument("--rank", type=int, default=16)
-    parser.add_argument("--learning-rate", type=float, default=0.0002)
-    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--learning-rate", type=float, default=0.0001)
+    parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--max-examples", type=int)
-    parser.add_argument("--max-length", type=int, default=2048)
+    parser.add_argument("--max-length", type=int, default=4096)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args(argv)
 
