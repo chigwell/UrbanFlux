@@ -1,0 +1,8 @@
+{
+  "generated_at": "2026-06-05T10:05:25.929Z",
+  "lsoa_count": 4994,
+  "total_population": 8799776,
+  "boundary_source": "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/Lower_layer_Super_Output_Areas_December_2021_Boundaries_EW_BSC_V4/FeatureServer/0/query",
+  "population_source": "https://www.nomisweb.co.uk/output/census/2021/census2021-ts001.zip",
+  "census_reference_date": "2021-03-21"
+}
