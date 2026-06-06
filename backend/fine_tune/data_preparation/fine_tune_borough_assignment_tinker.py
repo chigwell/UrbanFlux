@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import json
 import math
 import os
@@ -137,6 +138,49 @@ def extract_loss(forward_backward_result: Any, batch: list[Any]) -> float | None
     return -sum(logprobs[index] * weights[index] for index in range(usable)) / weight_sum
 
 
+async def maybe_await(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def result_if_future(value: Any) -> Any:
+    value = await maybe_await(value)
+    result_async = getattr(value, "result_async", None)
+    if callable(result_async):
+        return await result_async()
+    return value
+
+
+async def save_persistent_sampler_checkpoint(
+    service_client: Any,
+    training_client: Any,
+    checkpoint_name: str,
+) -> tuple[str, Any]:
+    save_method = getattr(training_client, "save_weights_for_sampler", None)
+    if save_method is None:
+        raise RuntimeError(
+            "Installed Tinker SDK does not expose save_weights_for_sampler(...). "
+            "Upgrade Tinker or use a version that supports persistent sampler checkpoints."
+        )
+
+    model_path = await result_if_future(save_method(name=checkpoint_name))
+    if not isinstance(model_path, str):
+        model_path = str(model_path)
+
+    create_method = getattr(service_client, "create_sampling_client", None)
+    if create_method is not None:
+        sampling_client = await maybe_await(create_method(model_path=model_path))
+        return model_path, sampling_client
+
+    create_async_method = getattr(service_client, "create_sampling_client_async", None)
+    if create_async_method is not None:
+        sampling_client = await maybe_await(create_async_method(model_path=model_path))
+        return model_path, sampling_client
+
+    return model_path, None
+
+
 def load_tinker_dependencies():
     try:
         import tinker
@@ -251,21 +295,24 @@ async def train(args: argparse.Namespace) -> int:
             if args.max_steps is not None and step >= args.max_steps:
                 break
 
-    sampling_client = await training_client.save_weights_and_get_sampling_client_async(
-        name=args.checkpoint_name
+    model_path, sampling_client = await save_persistent_sampler_checkpoint(
+        service_client=service_client,
+        training_client=training_client,
+        checkpoint_name=args.checkpoint_name,
     )
 
     print(
         json.dumps(
             {
                 "checkpoint_name": args.checkpoint_name,
+                "model_path": model_path,
                 "base_model": args.base_model,
                 "renderer": args.renderer,
                 "records": len(records),
                 "steps": step,
                 "final_loss": losses[-1] if losses else None,
                 "stop_sequences": stop_sequences,
-                "sampling_client_type": type(sampling_client).__name__,
+                "sampling_client_type": type(sampling_client).__name__ if sampling_client else None,
             },
             indent=2,
         )

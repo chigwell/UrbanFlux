@@ -56,6 +56,44 @@ def test_batched_splits_items_by_batch_size() -> None:
     assert list(ft.batched([1, 2, 3, 4, 5], 2)) == [[1, 2], [3, 4], [5]]
 
 
+def test_save_persistent_sampler_checkpoint_uses_model_path() -> None:
+    class FakeFuture:
+        async def result_async(self):
+            return "sampler://urbanflux-checkpoint"
+
+    class FakeTrainingClient:
+        def __init__(self):
+            self.saved_name = None
+
+        def save_weights_for_sampler(self, name: str):
+            self.saved_name = name
+            return FakeFuture()
+
+    class FakeServiceClient:
+        def __init__(self):
+            self.model_path = None
+
+        def create_sampling_client(self, model_path: str):
+            self.model_path = model_path
+            return {"sampling": True}
+
+    service_client = FakeServiceClient()
+    training_client = FakeTrainingClient()
+
+    model_path, sampling_client = ft.asyncio.run(
+        ft.save_persistent_sampler_checkpoint(
+            service_client=service_client,
+            training_client=training_client,
+            checkpoint_name="urbanflux-test",
+        )
+    )
+
+    assert training_client.saved_name == "urbanflux-test"
+    assert model_path == "sampler://urbanflux-checkpoint"
+    assert service_client.model_path == "sampler://urbanflux-checkpoint"
+    assert sampling_client == {"sampling": True}
+
+
 def test_dry_run_does_not_require_tinker_imports_or_api_key(monkeypatch, tmp_path: Path, capsys) -> None:
     dataset = tmp_path / "borough.jsonl"
     write_dataset(dataset)
