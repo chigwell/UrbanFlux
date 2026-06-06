@@ -837,6 +837,16 @@ async function fetchContextForCurrentPolygon() {
     );
   }
 
+  // When the vector basemap already yields a rich road graph (and either water is
+  // present or the user allowed building over water), the raw OSM refinement adds
+  // little. Skipping it avoids a slow/flaky network round-trip plus a second full
+  // generation. Sparse zones and water-gated zones still fall through to Overpass.
+  if (vectorFeatures.length > 0 && vectorContextSufficient(vectorFeatures)) {
+    cacheContextResult(contextKey, "vector", vectorFeatures);
+    setStatus(82, `Vector basemap context is rich (${vectorFeatures.length.toLocaleString()} features). Skipping raw OSM fetch.`);
+    return;
+  }
+
   const overpassBboxKey = bbox.map((value) => value.toFixed(3)).join(",");
   const overpassCached = state.overpassBBoxCache.get(overpassBboxKey);
   if (overpassCached) {
@@ -1552,6 +1562,27 @@ function waterContextReady() {
   // Keep generating from in-memory context during style swaps, zoom/pan tile
   // reloads, and background refetches — only block when context truly failed.
   return state.contextFeatures.length > 0 && state.contextStatus !== "failed";
+}
+
+function countContextKinds(features) {
+  const counts = { road: 0, water: 0, building: 0, park: 0 };
+  for (const feature of features) {
+    const kind = feature.properties?.kind;
+    if (kind in counts) {
+      counts[kind] += 1;
+    }
+  }
+  return counts;
+}
+
+// "Sufficient" = enough road geometry for solid boundary anchors, plus either
+// real water masks already present or water protection disabled. This keeps the
+// Overpass skip safe: zones that still need water masks fall through and fetch.
+function vectorContextSufficient(vectorFeatures) {
+  const counts = countContextKinds(vectorFeatures);
+  const roadsRich = counts.road >= 80;
+  const waterSafe = state.allowWater || counts.water >= 2;
+  return roadsRich && waterSafe;
 }
 
 function vectorContextLooksReady(vectorFeatures) {
@@ -2598,7 +2629,7 @@ function generateZoning({ localPolygon, frame, localBbox, obstacles, random, set
       const roll = random();
       const parkChance = clamp(green * 0.48 + anchorInfluence, 0.08, 0.5);
       const parkingChance = clamp(parking * 0.28, 0.02, 0.28);
-      const nearWater = pointDistanceToPolygons(jittered, obstacles) < 60;
+      const nearWater = pointDistanceToPolygons(jittered, obstacles, 60) < 60;
 
       if (roll < parkChance || nearWater) {
         const width = randomRange(random, stepX * 0.55, stepX * 1.26);
@@ -3063,15 +3094,29 @@ function polygonsIntersect(a, b) {
   return false;
 }
 
-function pointDistanceToPolygons(point, polygons) {
+function pointDistanceToBoundsLowerBound(point, bounds) {
+  const dx = Math.max(bounds.minX - point.x, 0, point.x - bounds.maxX);
+  const dy = Math.max(bounds.minY - point.y, 0, point.y - bounds.maxY);
+  return Math.hypot(dx, dy);
+}
+
+// `maxDistance` lets callers that only care about proximity (e.g. "is this within
+// 60 m of water?") cap the search so far-away obstacles are rejected by a cheap
+// bbox test before the O(edges) boundary scan. The bbox distance is always a
+// lower bound on the true boundary distance, so skipping never changes results.
+function pointDistanceToPolygons(point, polygons, maxDistance = Infinity) {
   if (polygons.length === 0) {
     return Infinity;
   }
-  let best = Infinity;
+  let best = maxDistance;
   for (const polygon of polygons) {
+    const bounds = ensureObstacleBounds(polygon);
+    if (pointDistanceToBoundsLowerBound(point, bounds) >= best) {
+      continue;
+    }
     const nearest = nearestPointOnPolygonBoundary(point, polygon);
-    if (nearest) {
-      best = Math.min(best, nearest.distance);
+    if (nearest && nearest.distance < best) {
+      best = nearest.distance;
     }
   }
   return best;
