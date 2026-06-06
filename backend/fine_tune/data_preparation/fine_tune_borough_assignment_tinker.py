@@ -157,16 +157,28 @@ async def save_persistent_sampler_checkpoint(
     training_client: Any,
     checkpoint_name: str,
 ) -> tuple[str, Any]:
-    save_method = getattr(training_client, "save_weights_for_sampler", None)
+    save_method = getattr(training_client, "save_weights_for_sampler_async", None)
+    if save_method is None:
+        save_method = getattr(training_client, "save_weights_for_sampler", None)
     if save_method is None:
         raise RuntimeError(
             "Installed Tinker SDK does not expose save_weights_for_sampler(...). "
             "Upgrade Tinker or use a version that supports persistent sampler checkpoints."
         )
 
-    model_path = await result_if_future(save_method(name=checkpoint_name))
+    save_result = await result_if_future(save_method(checkpoint_name))
+    model_path = getattr(save_result, "path", None)
+    if model_path is None and isinstance(save_result, dict):
+        model_path = save_result.get("path")
+    if model_path is None:
+        model_path = save_result
     if not isinstance(model_path, str):
         model_path = str(model_path)
+    if not model_path.startswith("tinker://"):
+        raise RuntimeError(
+            "Tinker save_weights_for_sampler did not return a usable tinker:// model path. "
+            f"Raw save result: {save_result!r}"
+        )
 
     create_method = getattr(service_client, "create_sampling_client", None)
     if create_method is not None:

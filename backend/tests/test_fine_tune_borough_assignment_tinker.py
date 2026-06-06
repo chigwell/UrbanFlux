@@ -57,15 +57,18 @@ def test_batched_splits_items_by_batch_size() -> None:
 
 
 def test_save_persistent_sampler_checkpoint_uses_model_path() -> None:
+    class FakeSaveResponse:
+        path = "tinker://urbanflux/checkpoint"
+
     class FakeFuture:
         async def result_async(self):
-            return "sampler://urbanflux-checkpoint"
+            return FakeSaveResponse()
 
     class FakeTrainingClient:
         def __init__(self):
             self.saved_name = None
 
-        def save_weights_for_sampler(self, name: str):
+        def save_weights_for_sampler_async(self, name: str):
             self.saved_name = name
             return FakeFuture()
 
@@ -89,8 +92,8 @@ def test_save_persistent_sampler_checkpoint_uses_model_path() -> None:
     )
 
     assert training_client.saved_name == "urbanflux-test"
-    assert model_path == "sampler://urbanflux-checkpoint"
-    assert service_client.model_path == "sampler://urbanflux-checkpoint"
+    assert model_path == "tinker://urbanflux/checkpoint"
+    assert service_client.model_path == "tinker://urbanflux/checkpoint"
     assert sampling_client == {"sampling": True}
 
 
