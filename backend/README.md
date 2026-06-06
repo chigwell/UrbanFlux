@@ -2,6 +2,8 @@
 
 Simple FastAPI backend with CORS enabled and a single Hello World endpoint.
 
+Production API URL: `https://api.urbanflux.london/`
+
 ## Run locally
 
 ### 1) Install dependencies
@@ -76,4 +78,11 @@ Check local VPS endpoint:
 ```bash
 curl -i http://127.0.0.1:8000/
 curl -i http://127.0.0.1:8000/hello
+```
+
+Check public API endpoint:
+
+```bash
+curl -i https://api.urbanflux.london/
+curl -i https://api.urbanflux.london/hello
 ```

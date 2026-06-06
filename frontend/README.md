@@ -48,3 +48,4 @@ Push to `main` triggers build and deploy to Cloudflare Pages.
 - Add your Cloudflare Pages project name in `CLOUDFLARE_PROJECT_NAME`.
 - This setup uses Next.js static export (`output: "export"`) and deploys directory `out`.
 - Production frontend URL: `https://urbanflux.london/`
+- Cloudflare Pages fallback URL: `https://urbanflux.pages.dev/`
