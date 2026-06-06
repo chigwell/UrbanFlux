@@ -37,15 +37,20 @@ export function CityTwinApp() {
   const [allowWater, setAllowWater] = useState(false);
   const [progress, setProgress] = useState(8);
   const [status, setStatus] = useState("Booting the CityTwin engine…");
-  const [pills, setPills] = useState<CityTwinPills>({ roads: 0, water: 0, anchors: 0 });
+  const [pills, setPills] = useState<CityTwinPills>({
+    roads: 0,
+    water: 0,
+    anchors: 0,
+  });
   const [metrics, setMetrics] = useState<CityTwinMetrics | null>(null);
   const [scenario, setScenario] = useState("No scenario yet");
   const [report, setReport] = useState("Loading the demo zone…");
-  const [hint, setHint] = useState("Click at least four points. Drag vertices to reshape.");
+  const [hint, setHint] = useState(
+    "Click at least four points. Drag vertices to reshape.",
+  );
 
   useEffect(() => setMounted(true), []);
 
-  // Mount the vanilla engine exactly once; lazy-load the heavy map bundle first.
   useEffect(() => {
     let cancelled = false;
     const initialDark = document.documentElement.classList.contains("dark");
@@ -101,17 +106,10 @@ export function CityTwinApp() {
     <div className="relative h-dvh w-full overflow-hidden bg-background">
       <div id="map" />
 
-      {/* Top-left: brand + live status */}
-      <div className="absolute left-4 top-4 z-10 flex w-[min(20rem,calc(100vw-2rem))] flex-col gap-3">
-        <div className="flex items-center justify-between gap-2 rounded-xl border bg-card/85 px-3 py-2 backdrop-blur">
-          <Link href="/" className="flex items-center gap-2 font-semibold">
-            <span className="grid size-7 place-items-center rounded-lg bg-primary text-primary-foreground">
-              UF
-            </span>
-            UrbanFlux
-          </Link>
+      <div className="absolute left-4 top-4 z-10 flex w-[min(21rem,calc(100vw-2rem))] flex-col gap-2.5">
+        <div className="flex w-fit items-center justify-between gap-2  border-[0.5px] bg-card px-3 py-2 shadow-sm">
           <Button asChild size="sm" variant="ghost">
-            <Link href="/">
+            <Link href="/" className="hover:bg-transparent">
               <ArrowLeftIcon data-icon="inline-start" />
               Home
             </Link>
@@ -121,8 +119,7 @@ export function CityTwinApp() {
         <StatusCard progress={progress} status={status} pills={pills} />
       </div>
 
-      {/* Right: controls + legend + dashboard */}
-      <div className="absolute right-4 top-4 z-10 flex max-h-[calc(100dvh-2rem)] w-[min(22rem,calc(100vw-2rem))] flex-col gap-3 overflow-y-auto pb-2 *:shrink-0">
+      <div className="absolute right-4 top-4 z-10 flex max-h-[calc(100dvh-2rem)] w-[min(22rem,calc(100vw-2rem))] flex-col gap-2.5 overflow-y-auto pb-2 *:shrink-0">
         <ControlsCard
           settings={settings}
           allowWater={allowWater}
@@ -139,9 +136,8 @@ export function CityTwinApp() {
         <DashboardCard scenario={scenario} metrics={metrics} report={report} />
       </div>
 
-      {/* Bottom-center: contextual hint */}
       <div className="pointer-events-none absolute inset-x-0 bottom-5 z-10 flex justify-center px-4">
-        <p className="pointer-events-auto max-w-md rounded-full border bg-card/85 px-4 py-2 text-center text-xs text-muted-foreground backdrop-blur">
+        <p className="pointer-events-auto max-w-xl border-[0.5px] bg-card px-4 py-2 text-center text-xs text-muted-foreground">
           {hint}
         </p>
       </div>
