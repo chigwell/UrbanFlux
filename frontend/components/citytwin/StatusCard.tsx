@@ -1,9 +1,9 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import type { CityTwinPills } from "@/lib/cityTwinMap";
+import { CollapsiblePanel } from "./CollapsiblePanel";
 
 interface StatusCardProps {
   progress: number;
@@ -13,8 +13,8 @@ interface StatusCardProps {
 
 export function StatusCard({ progress, status, pills }: StatusCardProps) {
   return (
-    <Card className="gap-3 bg-card/85 py-4 backdrop-blur">
-      <CardContent className="flex flex-col gap-3">
+    <CollapsiblePanel title="Planning engine" meta="live" defaultOpen={true}>
+      <div className="flex flex-col gap-3">
         <div className="flex items-center gap-2">
           <span className="relative flex size-2">
             <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-60" />
@@ -31,7 +31,7 @@ export function StatusCard({ progress, status, pills }: StatusCardProps) {
           <Badge variant="secondary">{pills.water.toLocaleString()} water masks</Badge>
           <Badge variant="secondary">{pills.anchors.toLocaleString()} anchors</Badge>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </CollapsiblePanel>
   );
 }

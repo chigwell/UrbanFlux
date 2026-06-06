@@ -1,13 +1,7 @@
 "use client";
 
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import type { CityTwinMetrics } from "@/lib/cityTwinMap";
+import { CollapsiblePanel } from "./CollapsiblePanel";
 
 interface DashboardCardProps {
   scenario: string;
@@ -28,12 +22,8 @@ export function DashboardCard({ scenario, metrics, report }: DashboardCardProps)
   ];
 
   return (
-    <Card className="gap-4 bg-card/85 backdrop-blur">
-      <CardHeader>
-        <CardTitle>Impact dashboard</CardTitle>
-        <CardDescription>{scenario}</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
+    <CollapsiblePanel title="Impact dashboard" meta={scenario}>
+      <div className="flex flex-col gap-4">
         <div className="grid grid-cols-3 gap-2">
           {tiles.map((tile) => (
             <div
@@ -46,7 +36,7 @@ export function DashboardCard({ scenario, metrics, report }: DashboardCardProps)
           ))}
         </div>
         <p className="text-xs leading-relaxed text-muted-foreground">{report}</p>
-      </CardContent>
-    </Card>
+      </div>
+    </CollapsiblePanel>
   );
 }

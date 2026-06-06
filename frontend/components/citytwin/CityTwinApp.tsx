@@ -15,6 +15,7 @@ import type {
 } from "@/lib/cityTwinMap";
 import { ControlsCard } from "./ControlsCard";
 import { DashboardCard } from "./DashboardCard";
+import { IntroCard } from "./IntroCard";
 import { LegendCard } from "./LegendCard";
 import { StatusCard } from "./StatusCard";
 
@@ -116,6 +117,7 @@ export function CityTwinApp() {
             </Link>
           </Button>
         </div>
+        <IntroCard />
         <StatusCard progress={progress} status={status} pills={pills} />
       </div>
 

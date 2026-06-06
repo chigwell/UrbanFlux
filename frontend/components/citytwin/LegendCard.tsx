@@ -1,11 +1,6 @@
 "use client";
 
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { CollapsiblePanel } from "./CollapsiblePanel";
 
 const LEGEND: { color: string; label: string; hint: string }[] = [
   { color: "#ffb86b", label: "Existing roads", hint: "OSM / basemap context" },
@@ -16,11 +11,8 @@ const LEGEND: { color: string; label: string; hint: string }[] = [
 
 export function LegendCard() {
   return (
-    <Card className="gap-4 bg-card/85 backdrop-blur">
-      <CardHeader>
-        <CardTitle>Legend</CardTitle>
-      </CardHeader>
-      <CardContent className="grid grid-cols-2 gap-x-3 gap-y-3">
+    <CollapsiblePanel title="What the demo proves" meta="topology">
+      <div className="grid grid-cols-2 gap-x-3 gap-y-3">
         {LEGEND.map((item) => (
           <div key={item.label} className="flex min-w-0 items-start gap-2">
             <span
@@ -37,7 +29,7 @@ export function LegendCard() {
             </div>
           </div>
         ))}
-      </CardContent>
-    </Card>
+      </div>
+    </CollapsiblePanel>
   );
 }

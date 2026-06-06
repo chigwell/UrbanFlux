@@ -2,17 +2,11 @@
 
 import { MoonIcon, RotateCcwIcon, SunIcon, Trash2Icon, Undo2Icon, MapPinnedIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import type { CityTwinSettingKey, CityTwinSettings } from "@/lib/cityTwinMap";
+import { CollapsiblePanel } from "./CollapsiblePanel";
 
 const SLIDERS: {
   key: CityTwinSettingKey;
@@ -55,12 +49,8 @@ export function ControlsCard({
   onFit,
 }: ControlsCardProps) {
   return (
-    <Card className="gap-4 bg-card/85 backdrop-blur">
-      <CardHeader>
-        <CardTitle>Urban controls</CardTitle>
-        <CardDescription>Every change replans the zone live.</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-5">
+    <CollapsiblePanel title="Urban controls" meta="scenario">
+      <div className="flex flex-col gap-5">
         <div className="grid grid-cols-2 gap-2">
           <Button size="sm" onClick={onDemo}>
             <MapPinnedIcon data-icon="inline-start" />
@@ -128,7 +118,7 @@ export function ControlsCard({
             </div>
           ))}
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </CollapsiblePanel>
   );
 }
