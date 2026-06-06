@@ -107,5 +107,7 @@ Detailed notes:
 - [ ] Fine-tune or adapt models for calculating replanning impact.
 
 
+# Saturday, June 6 - 3:00 PM Plan (`/impact` endpoint)
+
 ![](assets/1.png)
 
