@@ -1,10 +1,8 @@
 "use client";
 
 import {
-  MoonIcon,
   RotateCcwIcon,
   SparklesIcon,
-  SunIcon,
   Trash2Icon,
   Undo2Icon,
   MapPinnedIcon,
@@ -74,7 +72,6 @@ const SLIDERS: {
 interface ControlsCardProps {
   settings: CityTwinSettings;
   allowWater: boolean;
-  isDark: boolean;
   autoRunning: boolean;
   autoMode: AutoImprovementMode;
   controlsOpen: boolean;
@@ -84,7 +81,6 @@ interface ControlsCardProps {
   onRestartAutoImprovement: () => void;
   onSetting: (key: CityTwinSettingKey, value: number) => void;
   onAllowWater: (on: boolean) => void;
-  onToggleTheme: (dark: boolean) => void;
   onDemo: () => void;
   onUndo: () => void;
   onClear: () => void;
@@ -94,7 +90,6 @@ interface ControlsCardProps {
 export function ControlsCard({
   settings,
   allowWater,
-  isDark,
   autoRunning,
   autoMode,
   controlsOpen,
@@ -104,7 +99,6 @@ export function ControlsCard({
   onRestartAutoImprovement,
   onSetting,
   onAllowWater,
-  onToggleTheme,
   onDemo,
   onUndo,
   onClear,
@@ -199,29 +193,12 @@ export function ControlsCard({
           </Button>
         </div>
 
-        <Separator />
-
         <div className="flex flex-col gap-3">
-          <label className="flex items-center justify-between gap-3 text-sm">
-            <span className="flex items-center gap-2 font-medium">
-              {isDark ? (
-                <MoonIcon className="size-4" />
-              ) : (
-                <SunIcon className="size-4" />
-              )}
-              {isDark ? "Dark" : "Light"} basemap
-            </span>
-            <Switch
-              checked={isDark}
-              onCheckedChange={onToggleTheme}
-              aria-label="Toggle basemap theme"
-            />
-          </label>
           <label className="flex items-center justify-between gap-3 text-sm">
             <span className="font-medium">
               Water override
               <span className="block text-xs font-normal text-muted-foreground">
-                Allow building over rivers
+                Allow buildings over rivers
               </span>
             </span>
             <Switch
