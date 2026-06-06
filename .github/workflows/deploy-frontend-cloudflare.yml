@@ -93,7 +93,8 @@ jobs:
           sudo -n apt-get install -y python3-venv python3-pip rsync
 
           cd "${TARGET_DIR}"
-          if [ ! -d ".venv" ]; then
+          if [ ! -f ".venv/bin/activate" ]; then
+            rm -rf .venv
             python3 -m venv .venv
           fi
           . .venv/bin/activate
