@@ -25,7 +25,7 @@ export function Hero() {
           <Button
             asChild
             size="lg"
-            className="group h-11 rounded-none p-4 shadow-lg shadow-primary/20"
+            className="group h-11 rounded-none p-4 shadow-lg border-none"
           >
             <Link href="/app">
               Launch the tool
@@ -57,7 +57,7 @@ export function Hero() {
         style={{ animationDelay: "160ms" }}
       >
         <div className="pointer-events-none absolute -inset-x-8 -top-8 h-32 bg-[radial-gradient(60%_70%_at_50%_0%,color-mix(in_oklch,var(--uf-accent)_18%,transparent),transparent_72%)] blur-2xl" />
-        <div className="relative overflow-hidden border-[0.5px] bg-card shadow-2xl shadow-foreground/10 ring-1 ring-foreground/10">
+        <div className="relative overflow-hidden border-[0.5px]  bg-card shadow-2xl shadow-foreground/10 ring-1 ring-foreground/10">
           <div className="relative bg-background">
             <Image
               src="/urbanflux-demo.png"
