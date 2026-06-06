@@ -76,8 +76,39 @@ export function impactMessage(impact: CityTwinImpact | null): string | null {
     return null;
   }
   return impact.status === "loading"
-    ? "Estimating impact…"
+    ? "loading"
     : "Impact estimate unavailable. Adjust the controls to try again.";
+}
+
+function ImpactPreloader() {
+  return (
+    <div
+      className="uf-impact-loader border-[0.5px] bg-muted/20 p-3"
+      role="status"
+      aria-live="polite"
+      aria-label="Estimating impact"
+    >
+      <div className="flex items-center gap-3">
+        <div className="uf-impact-loader-mark" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm font-medium">Estimating impact</span>
+            <span className="uf-impact-loader-dots text-xs tabular-nums text-muted-foreground">
+              00
+            </span>
+          </div>
+          <div className="mt-2 h-px overflow-hidden bg-border">
+            <span className="uf-impact-loader-scan block h-full w-1/2" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function sourceLabel(source: string) {
@@ -99,6 +130,10 @@ export function ImpactMetricCards({
   const message = impactMessage(impact);
 
   if (message) {
+    if (message === "loading") {
+      return <ImpactPreloader />;
+    }
+
     return <p className="text-sm text-muted-foreground">{message}</p>;
   }
 
