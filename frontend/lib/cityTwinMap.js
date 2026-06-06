@@ -1,5 +1,9 @@
 import maplibregl from "maplibre-gl";
-import * as turf from "@turf/turf";
+import turfBbox from "@turf/bbox";
+import turfBuffer from "@turf/buffer";
+import turfBooleanIntersects from "@turf/boolean-intersects";
+import turfArea from "@turf/area";
+import turfCentroid from "@turf/centroid";
 
 const EMPTY = { type: "FeatureCollection", features: [] };
 const LONDON_CENTER = [-0.1276, 51.5072];
@@ -41,34 +45,45 @@ const WATER_RIVER_LINE_EXCLUSION_KM = 0.15;
 const WATER_CANAL_LINE_EXCLUSION_KM = 0.08;
 const WATER_MINOR_LINE_EXCLUSION_KM = 0.05;
 const WATER_DEFAULT_LINE_EXCLUSION_KM = 0.075;
-const MAX_WATER_OBSTACLES = 720;
+const MAX_WATER_OBSTACLES = 400;
+const CONTEXT_CACHE_MAX = 8;
+const OVERPASS_COOLDOWN_MS = 90_000;
+const OVERPASS_BBOX_CACHE_MAX = 12;
+const CONTEXT_FETCH_DEBOUNCE_MS = 520;
+// Per-kind caps for fetched context. A single flat cap let dense road counts
+// (tens of thousands in central London) starve water/building/park down to zero,
+// which removed the river masks and let the plan build over the Thames.
+const CONTEXT_KIND_BUDGETS = { road: 1200, water: 500, building: 600, park: 250 };
 const WATER_CONTEXT_READY_STATES = new Set(["vector", "osm", "partial"]);
 
 
-export function initCityTwinMap() {
-const dom = {
-  progressBar: document.getElementById("progressBar"),
-  statusText: document.getElementById("statusText"),
-  roadsPill: document.getElementById("roadsPill"),
-  waterPill: document.getElementById("waterPill"),
-  anchorsPill: document.getElementById("anchorsPill"),
-  scenarioLabel: document.getElementById("scenarioLabel"),
-  areaMetric: document.getElementById("areaMetric"),
-  homesMetric: document.getElementById("homesMetric"),
-  linksMetric: document.getElementById("linksMetric"),
-  waterMetric: document.getElementById("waterMetric"),
-  buildingsMetric: document.getElementById("buildingsMetric"),
-  parkingMetric: document.getElementById("parkingMetric"),
-  reportText: document.getElementById("reportText"),
-  mapHint: document.getElementById("mapHint"),
-  toast: document.getElementById("toast"),
-  themeToggle: document.getElementById("themeToggle"),
-  allowWaterToggle: document.getElementById("allowWaterToggle"),
+export function initCityTwinMap(options = {}) {
+// View bridge: the engine no longer reaches into the DOM by id. React passes
+// callbacks for every output and drives every input through the returned handle.
+const noop = () => {};
+const emit = {
+  onStatus: options.onStatus || noop,
+  onMetrics: options.onMetrics || noop,
+  onScenario: options.onScenario || noop,
+  onReport: options.onReport || noop,
+  onHint: options.onHint || noop,
+  onPills: options.onPills || noop,
+  onToast: options.onToast || noop,
+};
+
+const initialTheme = options.initialTheme === "light" ? "light" : "dark";
+const defaultSettings = {
+  density: 64,
+  green: 35,
+  parking: 18,
+  street: 35,
+  alignment: 72,
+  height: 58,
 };
 
 const state = {
-  theme: "dark",
-  allowWater: false,
+  theme: initialTheme,
+  allowWater: Boolean(options.initialAllowWater),
   vertices: [],
   vertexMarkers: [],
   midpointMarkers: [],
@@ -77,25 +92,24 @@ const state = {
   contextStatus: "empty",
   contextFetchController: null,
   overpassEndpointIndex: 0,
-  generationTimer: null,
+  generationRaf: null,
   contextTimer: null,
+  statsCache: null,
+  contextCache: new Map(),
+  overpassCooldownUntil: 0,
+  overpassBBoxCache: new Map(),
+  settledContextTimer: null,
+  lastGeneratedFeatures: [],
   toastTimer: null,
   mapReady: false,
   layersReady: false,
-  settings: {
-    density: 64,
-    green: 35,
-    parking: 18,
-    street: 35,
-    alignment: 72,
-    height: 58,
-  },
+  settings: { ...defaultSettings, ...(options.initialSettings || {}) },
   latestStats: createEmptyContextStats(),
 };
 
 const map = new maplibregl.Map({
-  container: "map",
-  style: MAP_STYLES.dark,
+  container: options.container || "map",
+  style: MAP_STYLES[initialTheme],
   center: LONDON_CENTER,
   zoom: 12.4,
   pitch: 57,
@@ -112,14 +126,18 @@ map.addControl(
 map.on("style.load", () => {
   initialiseMapLayers();
   refreshAllSources();
+  if (state.vertices.length < MIN_POLYGON_VERTICES) {
+    return;
+  }
+  // Invalidate the theme-scoped cache key but keep in-memory context/features on
+  // screen until the new basemap tiles are rendered and we can re-extract safely.
   state.contextKey = "";
-  state.contextStatus = "stale";
-  window.setTimeout(scheduleContextFetch, 220);
+  state.statsCache = null;
+  scheduleMapSettledContextFetch();
 });
 
 map.once("load", () => {
   state.mapReady = true;
-  wireUi();
   loadDemoZone();
   showToast("Demo zone loaded. Road fill controls how many boundary anchors are connected; road alignment controls how straight the corridors are.");
 });
@@ -131,36 +149,27 @@ map.on("click", (event) => {
   addVertex([event.lngLat.lng, event.lngLat.lat]);
 });
 
-function wireUi() {
-  document.getElementById("demoButton").addEventListener("click", () => loadDemoZone(true));
-  document.getElementById("clearButton").addEventListener("click", clearZone);
-  document.getElementById("undoButton").addEventListener("click", undoVertex);
-  document.getElementById("fitButton").addEventListener("click", fitToZone);
-
-  dom.themeToggle.addEventListener("change", (event) => {
-    setTheme(event.target.checked ? "light" : "dark");
-  });
-
-  dom.allowWaterToggle.addEventListener("change", (event) => {
-    state.allowWater = event.target.checked;
-    setStatus(
-      state.allowWater ? 70 : 78,
-      state.allowWater
-        ? "Water override enabled. Roads and buildings may cross mapped rivers and basins."
-        : "Water override disabled. Rivers and basins are hard masks for generated roads and buildings.",
-    );
-    scheduleGeneration();
-  });
-
-  for (const key of ["density", "green", "parking", "street", "alignment", "height"]) {
-    const input = document.getElementById(key);
-    const output = document.getElementById(`${key}Out`);
-    input.addEventListener("input", () => {
-      state.settings[key] = Number(input.value);
-      output.value = input.value;
-      scheduleGeneration();
-    });
+function setAllowWater(on) {
+  const next = Boolean(on);
+  if (state.allowWater === next) {
+    return;
   }
+  state.allowWater = next;
+  setStatus(
+    state.allowWater ? 70 : 78,
+    state.allowWater
+      ? "Water override enabled. Roads and buildings may cross mapped rivers and basins."
+      : "Water override disabled. Rivers and basins are hard masks for generated roads and buildings.",
+  );
+  scheduleGeneration();
+}
+
+function setSetting(key, value) {
+  if (!(key in state.settings)) {
+    return;
+  }
+  state.settings[key] = Number(value);
+  scheduleGeneration();
 }
 
 function setTheme(theme) {
@@ -168,7 +177,6 @@ function setTheme(theme) {
     return;
   }
   state.theme = theme;
-  document.body.dataset.theme = theme;
   map.setStyle(MAP_STYLES[theme], { diff: false });
   setStatus(74, `${theme === "light" ? "Light" : "Dark"} theme loaded. Restoring generated layers...`);
 }
@@ -497,7 +505,9 @@ function refreshAllSources() {
   }
   updateSelectionSource();
   setSourceData("context", { type: "FeatureCollection", features: state.contextFeatures });
-  scheduleGeneration();
+  // Re-render immediately after a style swap — debounced generation would briefly
+  // clear output when contextStatus was previously set to "stale".
+  generateScenario();
 }
 
 function setSourceData(sourceId, data) {
@@ -550,17 +560,23 @@ function loadDemoZone(showMessage = false) {
   ];
   renderVertexMarkers();
   updateSelectionSource();
-  fitToZone();
-  scheduleContextFetch();
-  scheduleGeneration();
+  fitToZone({ animated: showMessage });
+  queueInitialContextFetch();
   if (showMessage) {
     showToast("Demo zone restored. Water override is off by default, so mapped rivers are excluded from generation.");
   }
 }
 
-function fitToZone() {
+function fitToZone(options = {}) {
+  const animated = options.animated === true;
   if (state.vertices.length === 0) {
-    map.easeTo({ center: LONDON_CENTER, zoom: 12.4, pitch: 57, bearing: -18, duration: 700 });
+    map.easeTo({
+      center: LONDON_CENTER,
+      zoom: 12.4,
+      pitch: 57,
+      bearing: -18,
+      duration: animated ? 700 : 0,
+    });
     return;
   }
   const bounds = state.vertices.reduce(
@@ -571,7 +587,7 @@ function fitToZone() {
     padding: { top: 94, bottom: 92, left: 380, right: 440 },
     pitch: 57,
     bearing: -18,
-    duration: 760,
+    duration: animated ? 760 : 0,
     maxZoom: 15.2,
   });
 }
@@ -598,8 +614,6 @@ function renderVertexMarkers() {
       const lngLat = marker.getLngLat();
       state.vertices[index] = [lngLat.lng, lngLat.lat];
       updateSelectionSource();
-      renderMidpointMarkersOnly();
-      scheduleGeneration();
     });
     marker.on("dragend", () => {
       const lngLat = marker.getLngLat();
@@ -694,16 +708,84 @@ function polygonFeature(vertices) {
 }
 
 function scheduleGeneration() {
-  window.clearTimeout(state.generationTimer);
-  state.generationTimer = window.setTimeout(generateScenario, 40);
+  if (state.generationRaf !== null) {
+    cancelAnimationFrame(state.generationRaf);
+  }
+  state.generationRaf = requestAnimationFrame(() => {
+    state.generationRaf = null;
+    generateScenario();
+  });
 }
 
-function scheduleContextFetch() {
+function scheduleContextFetch(options = {}) {
   if (state.vertices.length < MIN_POLYGON_VERTICES) {
     return;
   }
   window.clearTimeout(state.contextTimer);
-  state.contextTimer = window.setTimeout(fetchContextForCurrentPolygon, 520);
+  const delay = options.urgent ? 0 : CONTEXT_FETCH_DEBOUNCE_MS;
+  state.contextTimer = window.setTimeout(fetchContextForCurrentPolygon, delay);
+}
+
+function queueInitialContextFetch() {
+  window.clearTimeout(state.contextTimer);
+  const run = () => {
+    state.contextTimer = null;
+    fetchContextForCurrentPolygon();
+  };
+  if (!map.isStyleLoaded() || map.isMoving()) {
+    map.once("idle", run);
+    return;
+  }
+  run();
+}
+
+function scheduleMapSettledContextFetch() {
+  window.clearTimeout(state.settledContextTimer);
+  const queue = () => {
+    state.settledContextTimer = window.setTimeout(() => {
+      if (state.vertices.length >= MIN_POLYGON_VERTICES) {
+        scheduleContextFetch();
+      }
+    }, 280);
+  };
+  if (!map.isStyleLoaded() || map.isMoving()) {
+    map.once("idle", queue);
+    return;
+  }
+  queue();
+}
+
+function buildContextKey(bbox) {
+  return `${state.theme}:${bbox.map((value) => value.toFixed(4)).join(",")}`;
+}
+
+function applyContextResult(status, features) {
+  state.contextStatus = status;
+  state.contextFeatures = features;
+  state.statsCache = null;
+  setSourceData("context", { type: "FeatureCollection", features });
+}
+
+function cacheContextResult(contextKey, status, features) {
+  state.contextCache.set(contextKey, { status, features });
+  while (state.contextCache.size > CONTEXT_CACHE_MAX) {
+    const oldest = state.contextCache.keys().next().value;
+    state.contextCache.delete(oldest);
+  }
+}
+
+function cacheOverpassPayload(bboxKey, features) {
+  state.overpassBBoxCache.set(bboxKey, features);
+  while (state.overpassBBoxCache.size > OVERPASS_BBOX_CACHE_MAX) {
+    const oldest = state.overpassBBoxCache.keys().next().value;
+    state.overpassBBoxCache.delete(oldest);
+  }
+}
+
+async function waitForMapSettled() {
+  if (!map.isStyleLoaded() || map.isMoving()) {
+    await new Promise((resolve) => map.once("idle", resolve));
+  }
 }
 
 async function fetchContextForCurrentPolygon() {
@@ -711,14 +793,21 @@ async function fetchContextForCurrentPolygon() {
     return;
   }
   const polygon = polygonFeature(state.vertices);
-  const bbox = expandBbox(turf.bbox(polygon), 0.0062);
-  const contextKey = `${state.theme}:${Math.round(map.getZoom() * 10)}:${bbox
-    .map((value) => value.toFixed(4))
-    .join(",")}`;
+  const bbox = expandBbox(turfBbox(polygon), 0.0062);
+  const contextKey = buildContextKey(bbox);
+  const cached = state.contextCache.get(contextKey);
+  if (cached) {
+    state.contextKey = contextKey;
+    applyContextResult(cached.status, cached.features);
+    generateScenario();
+    return;
+  }
   if (contextKey === state.contextKey && state.contextFeatures.length) {
     return;
   }
   state.contextKey = contextKey;
+  state.statsCache = null;
+  const previousContextStatus = state.contextStatus;
 
   if (state.contextFetchController) {
     state.contextFetchController.abort();
@@ -726,16 +815,62 @@ async function fetchContextForCurrentPolygon() {
   state.contextFetchController = new AbortController();
   state.contextStatus = "fetching";
 
+  if (state.contextFeatures.length === 0) {
+    await waitForMapSettled();
+  }
+
   setStatus(34, "Reading vector basemap topology for roads, rivers, buildings and parks...");
-  const vectorFeatures = extractVectorTileContextFeatures({ selectedPolygon: polygon, bbox });
+  let vectorFeatures = extractVectorTileContextFeatures({ selectedPolygon: polygon, bbox });
+  if (!vectorContextLooksReady(vectorFeatures) && state.contextFeatures.length > 0) {
+    state.contextStatus = WATER_CONTEXT_READY_STATES.has(previousContextStatus) ? previousContextStatus : "vector";
+    setSourceData("context", { type: "FeatureCollection", features: state.contextFeatures });
+    scheduleMapSettledContextFetch();
+    generateScenario();
+    return;
+  }
   if (vectorFeatures.length > 0) {
-    state.contextStatus = "vector";
-    state.contextFeatures = vectorFeatures;
-    setSourceData("context", { type: "FeatureCollection", features: vectorFeatures });
+    applyContextResult("vector", vectorFeatures);
+    generateScenario();
     setStatus(
       54,
       `Loaded ${vectorFeatures.length.toLocaleString()} vector-tile features. Fetching raw OSM road graph for exact boundary anchors...`,
     );
+  }
+
+  // When the vector basemap already yields a rich road graph (and either water is
+  // present or the user allowed building over water), the raw OSM refinement adds
+  // little. Skipping it avoids a slow/flaky network round-trip plus a second full
+  // generation. Sparse zones and water-gated zones still fall through to Overpass.
+  if (vectorFeatures.length > 0 && vectorContextSufficient(vectorFeatures)) {
+    cacheContextResult(contextKey, "vector", vectorFeatures);
+    setStatus(82, `Vector basemap context is rich (${vectorFeatures.length.toLocaleString()} features). Skipping raw OSM fetch.`);
+    return;
+  }
+
+  const overpassBboxKey = bbox.map((value) => value.toFixed(3)).join(",");
+  const overpassCached = state.overpassBBoxCache.get(overpassBboxKey);
+  if (overpassCached) {
+    const features = capContextFeaturesByKind(mergeContextFeatures(vectorFeatures, overpassCached));
+    applyContextResult("osm", features);
+    cacheContextResult(contextKey, "osm", features);
+    setStatus(
+      78,
+      `Merged ${features.length.toLocaleString()} basemap + cached OSM geometries. Rebuilding road-connected plan...`,
+    );
+    generateScenario();
+    return;
+  }
+
+  if (Date.now() < state.overpassCooldownUntil) {
+    if (vectorFeatures.length > 0) {
+      applyContextResult("vector", vectorFeatures);
+      cacheContextResult(contextKey, "vector", vectorFeatures);
+      setStatus(68, "Overpass cooling down. Using vector-tile topology.");
+      generateScenario();
+    } else {
+      state.contextStatus = WATER_CONTEXT_READY_STATES.has(previousContextStatus) ? previousContextStatus : state.contextStatus;
+    }
+    return;
   }
 
   setStatus(62, "Fetching raw OSM roads, buildings, parks and water geometry around the selected boundary...");
@@ -750,14 +885,17 @@ async function fetchContextForCurrentPolygon() {
       signal: state.contextFetchController.signal,
     });
     if (!response.ok) {
+      if (response.status === 429 || response.status >= 500) {
+        state.overpassCooldownUntil = Date.now() + OVERPASS_COOLDOWN_MS;
+      }
       throw new Error(`Overpass HTTP ${response.status}`);
     }
     const data = await response.json();
     const overpassFeatures = parseOverpassFeatures(data, polygon);
-    const features = mergeContextFeatures(vectorFeatures, overpassFeatures).slice(0, 2200);
-    state.contextStatus = "osm";
-    state.contextFeatures = features;
-    setSourceData("context", { type: "FeatureCollection", features });
+    cacheOverpassPayload(overpassBboxKey, overpassFeatures);
+    const features = capContextFeaturesByKind(mergeContextFeatures(vectorFeatures, overpassFeatures));
+    applyContextResult("osm", features);
+    cacheContextResult(contextKey, "osm", features);
     setStatus(
       78,
       `Merged ${features.length.toLocaleString()} basemap + raw OSM geometries. Rebuilding road-connected plan...`,
@@ -767,12 +905,10 @@ async function fetchContextForCurrentPolygon() {
     if (error.name === "AbortError") {
       return;
     }
-    console.warn("OSM context fetch failed", error);
     state.overpassEndpointIndex += 1;
     if (vectorFeatures.length > 0) {
-      state.contextStatus = "partial";
-      state.contextFeatures = vectorFeatures;
-      setSourceData("context", { type: "FeatureCollection", features: vectorFeatures });
+      applyContextResult("partial", vectorFeatures);
+      cacheContextResult(contextKey, "partial", vectorFeatures);
       setStatus(
         68,
         "Raw OSM fetch failed, but vector-tile topology is available. Using basemap-snapped road connectors.",
@@ -780,6 +916,7 @@ async function fetchContextForCurrentPolygon() {
       generateScenario();
       return;
     }
+    console.warn("OSM context fetch failed with no vector fallback", error);
     state.contextStatus = "failed";
     state.contextFeatures = [];
     setSourceData("context", EMPTY);
@@ -793,34 +930,35 @@ function extractVectorTileContextFeatures({ selectedPolygon, bbox }) {
     return [];
   }
 
+  const filterCtx = createContextFilterCtx(selectedPolygon);
   const layers = discoverBasemapContextLayers();
   const pixelBox = bboxToPixelQueryBox(bbox, 132);
   const features = [];
 
   features.push(
-    ...queryRenderedContextFeatures(pixelBox, layers.road, "road", selectedPolygon),
-    ...queryRenderedContextFeatures(pixelBox, layers.water, "water", selectedPolygon),
-    ...queryRenderedContextFeatures(pixelBox, layers.building, "building", selectedPolygon),
-    ...queryRenderedContextFeatures(pixelBox, layers.park, "park", selectedPolygon),
+    ...queryRenderedContextFeatures(pixelBox, layers.road, "road", filterCtx),
+    ...queryRenderedContextFeatures(pixelBox, layers.water, "water", filterCtx),
+    ...queryRenderedContextFeatures(pixelBox, layers.building, "building", filterCtx),
+    ...queryRenderedContextFeatures(pixelBox, layers.park, "park", filterCtx),
   );
 
   // queryRenderedFeatures is visually exact, but hidden/minor roads may be absent at some zooms.
   // querySourceFeatures fills that gap from currently loaded vector tiles. The layer list covers
   // OpenMapTiles/OpenFreeMap and common Protomaps-compatible source-layer names.
   if (features.filter((feature) => feature.properties.kind === "road").length < 10) {
-    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.road, "road", selectedPolygon));
+    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.road, "road", filterCtx));
   }
   if (features.filter((feature) => feature.properties.kind === "water").length < 4) {
-    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.water, "water", selectedPolygon));
+    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.water, "water", filterCtx));
   }
   if (features.filter((feature) => feature.properties.kind === "building").length < 12) {
-    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.building, "building", selectedPolygon));
+    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.building, "building", filterCtx));
   }
   if (features.filter((feature) => feature.properties.kind === "park").length < 6) {
-    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.park, "park", selectedPolygon));
+    features.push(...querySourceContextFeatureLayers(VECTOR_CONTEXT_SOURCE_LAYERS.park, "park", filterCtx));
   }
 
-  return dedupeContextFeatures(features).slice(0, 1800);
+  return capContextFeaturesByKind(dedupeContextFeatures(features));
 }
 
 function discoverBasemapContextLayers() {
@@ -868,25 +1006,25 @@ function bboxToPixelQueryBox(bbox, padding) {
   ];
 }
 
-function queryRenderedContextFeatures(pixelBox, layerIds, kind, selectedPolygon) {
+function queryRenderedContextFeatures(pixelBox, layerIds, kind, filterCtx) {
   if (!layerIds.length) {
     return [];
   }
   try {
     return map
       .queryRenderedFeatures(pixelBox, { layers: layerIds })
-      .flatMap((feature) => normaliseMapFeature(feature, kind, selectedPolygon, "basemap-rendered"));
+      .flatMap((feature) => normaliseMapFeature(feature, kind, filterCtx, "basemap-rendered"));
   } catch (error) {
     console.warn(`Rendered ${kind} context query failed`, error);
     return [];
   }
 }
 
-function querySourceContextFeatureLayers(sourceLayers, kind, selectedPolygon) {
-  return sourceLayers.flatMap((sourceLayer) => querySourceContextFeatures(sourceLayer, kind, selectedPolygon));
+function querySourceContextFeatureLayers(sourceLayers, kind, filterCtx) {
+  return sourceLayers.flatMap((sourceLayer) => querySourceContextFeatures(sourceLayer, kind, filterCtx));
 }
 
-function querySourceContextFeatures(sourceLayer, kind, selectedPolygon) {
+function querySourceContextFeatures(sourceLayer, kind, filterCtx) {
   const style = map.getStyle();
   const sourceIds = Object.entries(style.sources || {})
     .filter(([, source]) => source && source.type === "vector")
@@ -898,7 +1036,7 @@ function querySourceContextFeatures(sourceLayer, kind, selectedPolygon) {
       features.push(
         ...map
           .querySourceFeatures(sourceId, { sourceLayer })
-          .flatMap((feature) => normaliseMapFeature(feature, kind, selectedPolygon, "basemap-source")),
+          .flatMap((feature) => normaliseMapFeature(feature, kind, filterCtx, "basemap-source")),
       );
     } catch (_) {
       // Not every basemap source exposes every source-layer.
@@ -907,7 +1045,7 @@ function querySourceContextFeatures(sourceLayer, kind, selectedPolygon) {
   return features;
 }
 
-function normaliseMapFeature(feature, kind, selectedPolygon, contextSource) {
+function normaliseMapFeature(feature, kind, filterCtx, contextSource) {
   const geometry = feature.geometry;
   if (!geometry) {
     return [];
@@ -931,7 +1069,7 @@ function normaliseMapFeature(feature, kind, selectedPolygon, contextSource) {
         properties: base,
         geometry: { type: "LineString", coordinates },
       }))
-      .filter((candidate) => candidate.geometry.coordinates.length >= 2 && shouldKeepContextFeature(candidate, selectedPolygon));
+      .filter((candidate) => candidate.geometry.coordinates.length >= 2 && shouldKeepContextFeature(candidate, filterCtx));
   }
 
   if (kind === "water" && (geometry.type === "LineString" || geometry.type === "MultiLineString")) {
@@ -941,7 +1079,7 @@ function normaliseMapFeature(feature, kind, selectedPolygon, contextSource) {
         properties: base,
         geometry: { type: "LineString", coordinates },
       }))
-      .filter((candidate) => candidate.geometry.coordinates.length >= 2 && shouldKeepContextFeature(candidate, selectedPolygon));
+      .filter((candidate) => candidate.geometry.coordinates.length >= 2 && shouldKeepContextFeature(candidate, filterCtx));
   }
 
   return flattenPolygonGeometry(geometry)
@@ -954,7 +1092,7 @@ function normaliseMapFeature(feature, kind, selectedPolygon, contextSource) {
         properties: base,
         geometry: { type: "Polygon", coordinates: [closeRing(ring)] },
       };
-      return shouldKeepContextFeature(polygon, selectedPolygon) ? polygon : null;
+      return shouldKeepContextFeature(polygon, filterCtx) ? polygon : null;
     })
     .filter(Boolean);
 }
@@ -1029,6 +1167,25 @@ function dedupeContextFeatures(features) {
   return result;
 }
 
+// Cap a mixed-kind feature list per kind instead of with a single flat slice, so
+// abundant roads can never crowd out water/building/park (which are appended after
+// roads). This keeps river masks available for water-aware replanning.
+function capContextFeaturesByKind(features, budgets = CONTEXT_KIND_BUDGETS) {
+  const counts = {};
+  const result = [];
+  for (const feature of features) {
+    const kind = feature.properties?.kind || "other";
+    const budget = budgets[kind] ?? 150;
+    const used = counts[kind] || 0;
+    if (used >= budget) {
+      continue;
+    }
+    counts[kind] = used + 1;
+    result.push(feature);
+  }
+  return result;
+}
+
 function contextFeatureKey(feature) {
   const coordinates = firstAndLastCoordinates(feature.geometry);
   if (!coordinates) {
@@ -1085,17 +1242,20 @@ out body geom qt;
 }
 
 function parseOverpassFeatures(data, selectedPolygon) {
+  const filterCtx = createContextFilterCtx(selectedPolygon);
   const features = [];
   for (const element of data.elements || []) {
-    const elementFeatures = parseOverpassElement(element, selectedPolygon);
+    const elementFeatures = parseOverpassElement(element, filterCtx);
     for (const feature of elementFeatures) {
       features.push(feature);
     }
   }
-  return features.slice(0, 1800);
+  // Overpass returns highway ways first; a flat slice here dropped the water ways
+  // that come later in the query. Cap per kind so rivers always survive.
+  return capContextFeaturesByKind(features);
 }
 
-function parseOverpassElement(element, selectedPolygon) {
+function parseOverpassElement(element, filterCtx) {
   const tags = element.tags || {};
   const features = [];
 
@@ -1111,7 +1271,7 @@ function parseOverpassElement(element, selectedPolygon) {
         continue;
       }
       const feature = featureFromCoords(coords, kind, tags, `${element.type}/${element.id}/${member.ref || features.length}`);
-      if (feature && shouldKeepContextFeature(feature, selectedPolygon)) {
+      if (feature && shouldKeepContextFeature(feature, filterCtx)) {
         features.push(feature);
       }
     }
@@ -1128,7 +1288,7 @@ function parseOverpassElement(element, selectedPolygon) {
     return features;
   }
   const feature = featureFromCoords(coords, kind, tags, `${element.type}/${element.id}`);
-  if (feature && shouldKeepContextFeature(feature, selectedPolygon)) {
+  if (feature && shouldKeepContextFeature(feature, filterCtx)) {
     features.push(feature);
   }
   return features;
@@ -1163,21 +1323,105 @@ function featureFromCoords(coords, kind, tags, osmId) {
   };
 }
 
-function shouldKeepContextFeature(feature, selectedPolygon) {
-  try {
-    const searchEnvelope = turf.buffer(selectedPolygon, 0.28, { units: "kilometers", steps: 8 });
-    const intersectsSearchEnvelope = turf.booleanIntersects(feature, searchEnvelope);
-    if (!intersectsSearchEnvelope) {
-      return false;
+function createContextFilterCtx(selectedPolygon) {
+  const searchBbox = expandBbox(turfBbox(selectedPolygon), 0.0035);
+  const coords = selectedPolygon.geometry.coordinates[0];
+  const selectionRing =
+    coords.length >= 4 && sameCoord(coords[0], coords[coords.length - 1]) ? coords.slice(0, -1) : coords;
+  return { searchBbox, selectionRing };
+}
+
+function featureLngLatBbox(feature) {
+  const geometry = feature.geometry;
+  if (!geometry) {
+    return null;
+  }
+  let minLng = Infinity;
+  let minLat = Infinity;
+  let maxLng = -Infinity;
+  let maxLat = -Infinity;
+  const visit = (lng, lat) => {
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+      return;
     }
-    if (feature.properties.kind !== "building") {
-      return true;
+    minLng = Math.min(minLng, lng);
+    maxLng = Math.max(maxLng, lng);
+    minLat = Math.min(minLat, lat);
+    maxLat = Math.max(maxLat, lat);
+  };
+  if (geometry.type === "LineString") {
+    for (const coord of geometry.coordinates) {
+      visit(coord[0], coord[1]);
     }
-    const centroid = turf.centroid(feature);
-    return !turf.booleanPointInPolygon(centroid, selectedPolygon);
-  } catch (_) {
+  } else if (geometry.type === "Polygon") {
+    for (const coord of geometry.coordinates[0]) {
+      visit(coord[0], coord[1]);
+    }
+  }
+  if (!Number.isFinite(minLng)) {
+    return null;
+  }
+  return [minLng, minLat, maxLng, maxLat];
+}
+
+function lngLatBboxesOverlap(a, b) {
+  return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+}
+
+function pointInLngLatRing(lng, lat, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    const xi = ring[i][0];
+    const yi = ring[i][1];
+    const xj = ring[j][0];
+    const yj = ring[j][1];
+    const intersects = yi > lat !== yj > lat && lng < ((xj - xi) * (lat - yi)) / (yj - yi || 1e-12) + xi;
+    if (intersects) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function featureCentroidLngLat(feature) {
+  const geometry = feature.geometry;
+  if (geometry.type === "LineString") {
+    let sumLng = 0;
+    let sumLat = 0;
+    for (const coord of geometry.coordinates) {
+      sumLng += coord[0];
+      sumLat += coord[1];
+    }
+    const count = geometry.coordinates.length;
+    return count ? [sumLng / count, sumLat / count] : null;
+  }
+  if (geometry.type === "Polygon") {
+    const ring = geometry.coordinates[0];
+    const limit = ring.length >= 4 && sameCoord(ring[0], ring[ring.length - 1]) ? ring.length - 1 : ring.length;
+    let sumLng = 0;
+    let sumLat = 0;
+    for (let index = 0; index < limit; index += 1) {
+      sumLng += ring[index][0];
+      sumLat += ring[index][1];
+    }
+    return limit ? [sumLng / limit, sumLat / limit] : null;
+  }
+  return null;
+}
+
+function shouldKeepContextFeature(feature, filterCtx) {
+  const featureBbox = featureLngLatBbox(feature);
+  if (!featureBbox || !lngLatBboxesOverlap(featureBbox, filterCtx.searchBbox)) {
+    return false;
+  }
+  if (feature.properties.kind !== "building") {
     return true;
   }
+  const centroid = featureCentroidLngLat(feature);
+  if (!centroid) {
+    return true;
+  }
+  return !pointInLngLatRing(centroid[0], centroid[1], filterCtx.selectionRing);
 }
 
 function classifyOsm(tags, closed) {
@@ -1258,19 +1502,30 @@ function generateScenario() {
   const centroid = polygonCentroidLocal(localPolygon);
   const random = seededRandom(hashString(state.vertices.map((coord) => coord.map((n) => n.toFixed(5)).join(":"))
     .join("|") + JSON.stringify(state.settings) + String(state.allowWater)));
-  const stats = buildContextStats({
-    features: state.contextFeatures,
-    selectedPolygon,
-    frame,
-    localPolygon,
-  });
+  const statsKey = `${state.contextKey}|${state.theme}|${state.vertices
+    .map((coord) => `${coord[0].toFixed(5)},${coord[1].toFixed(5)}`)
+    .join("|")}`;
+  let stats = state.statsCache?.key === statsKey ? state.statsCache.stats : null;
+  if (!stats) {
+    stats = buildContextStats({
+      features: state.contextFeatures,
+      selectedPolygon,
+      frame,
+      localPolygon,
+    });
+    state.statsCache = { key: statsKey, stats };
+  }
   state.latestStats = stats;
   if (!state.allowWater && !waterContextReady()) {
+    if (state.lastGeneratedFeatures.length > 0) {
+      setSourceData("generated", { type: "FeatureCollection", features: state.lastGeneratedFeatures });
+      return;
+    }
     setSourceData("generated", EMPTY);
     updateMetrics(null);
     updatePills(stats);
-    dom.reportText.textContent = "Waiting for vector-tile or raw OSM water masks before generating. Water override is off, so the fallback layout is blocked instead of guessing across rivers.";
-    dom.mapHint.textContent = "Water protection is on. Waiting for river and waterbody masks before drawing generated roads/buildings.";
+    emit.onReport("Waiting for vector-tile or raw OSM water masks before generating. Water override is off, so the fallback layout is blocked instead of guessing across rivers.");
+    emit.onHint("Water protection is on. Waiting for river and waterbody masks before drawing generated roads/buildings.");
     setStatus(46, "Water protection is enabled. Waiting for river and waterbody masks before generating the plan...");
     return;
   }
@@ -1286,6 +1541,7 @@ function generateScenario() {
     allowWater: state.allowWater,
   });
 
+  state.lastGeneratedFeatures = generated.features;
   setSourceData("generated", { type: "FeatureCollection", features: generated.features });
   updateMetrics(generated.metrics);
   updatePills(stats);
@@ -1300,7 +1556,44 @@ function generateScenario() {
 }
 
 function waterContextReady() {
-  return WATER_CONTEXT_READY_STATES.has(state.contextStatus);
+  if (WATER_CONTEXT_READY_STATES.has(state.contextStatus)) {
+    return true;
+  }
+  // Keep generating from in-memory context during style swaps, zoom/pan tile
+  // reloads, and background refetches — only block when context truly failed.
+  return state.contextFeatures.length > 0 && state.contextStatus !== "failed";
+}
+
+function countContextKinds(features) {
+  const counts = { road: 0, water: 0, building: 0, park: 0 };
+  for (const feature of features) {
+    const kind = feature.properties?.kind;
+    if (kind in counts) {
+      counts[kind] += 1;
+    }
+  }
+  return counts;
+}
+
+// "Sufficient" = enough road geometry for solid boundary anchors, plus either
+// real water masks already present or water protection disabled. This keeps the
+// Overpass skip safe: zones that still need water masks fall through and fetch.
+function vectorContextSufficient(vectorFeatures) {
+  const counts = countContextKinds(vectorFeatures);
+  const roadsRich = counts.road >= 80;
+  const waterSafe = state.allowWater || counts.water >= 2;
+  return roadsRich && waterSafe;
+}
+
+function vectorContextLooksReady(vectorFeatures) {
+  if (vectorFeatures.length === 0) {
+    return false;
+  }
+  if (state.contextFeatures.length === 0) {
+    return true;
+  }
+  // queryRenderedFeatures returns little/nothing until vector tiles paint after setStyle.
+  return vectorFeatures.length >= Math.max(24, state.contextFeatures.length * 0.3);
 }
 
 function buildContextStats({ features, selectedPolygon, frame, localPolygon }) {
@@ -1352,12 +1645,13 @@ function buildWaterObstacles({ water, selectedPolygon, frame }) {
   for (const feature of water) {
     try {
       for (const mask of createWaterMasks(feature)) {
-        if (!mask || !turf.booleanIntersects(mask, selectedPolygon)) {
+        if (!mask || !turfBooleanIntersects(mask, selectedPolygon)) {
           continue;
         }
         for (const ring of collectPolygonRings(mask)) {
           const localRing = closeLocalRing(ring.map((coord) => lngLatToLocal(coord, frame)));
           if (Math.abs(polygonSignedArea(localRing)) > 20) {
+            ensureObstacleBounds(localRing);
             obstacles.push(localRing);
           }
         }
@@ -1369,20 +1663,38 @@ function buildWaterObstacles({ water, selectedPolygon, frame }) {
   return dedupeWaterObstacles(obstacles).slice(0, MAX_WATER_OBSTACLES);
 }
 
+// The buffered mask is in lng/lat and depends only on the water feature itself,
+// not on the drawn polygon or local frame. Cache it on the feature object so a
+// drag replan reuses it; a context refetch creates fresh feature objects, which
+// naturally invalidates the cache.
 function createWaterMasks(feature) {
   if (!feature?.geometry) {
     return [];
   }
+  if (feature._waterMasks) {
+    return feature._waterMasks;
+  }
+  const masks = computeWaterMasks(feature);
+  Object.defineProperty(feature, "_waterMasks", {
+    value: masks,
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  });
+  return masks;
+}
+
+function computeWaterMasks(feature) {
   const geometryType = feature.geometry.type;
   if (geometryType === "LineString" || geometryType === "MultiLineString") {
-    const buffered = turf.buffer(feature, waterMaskWidthKm(feature), {
+    const buffered = turfBuffer(feature, waterMaskWidthKm(feature), {
       units: "kilometers",
       steps: 12,
     });
     return buffered ? [buffered] : [];
   }
   if (geometryType === "Polygon" || geometryType === "MultiPolygon") {
-    const buffered = turf.buffer(feature, WATER_POLYGON_EXCLUSION_KM, {
+    const buffered = turfBuffer(feature, WATER_POLYGON_EXCLUSION_KM, {
       units: "kilometers",
       steps: 12,
     });
@@ -1427,6 +1739,13 @@ function closeLocalRing(points) {
     return points;
   }
   return sameLocalPoint(points[0], points[points.length - 1]) ? points : [...points, points[0]];
+}
+
+function closeRing(ring) {
+  if (!ring.length) {
+    return ring;
+  }
+  return sameCoord(ring[0], ring[ring.length - 1]) ? ring : [...ring, ring[0]];
 }
 
 function collectPolygonRings(feature) {
@@ -1526,6 +1845,7 @@ function findRoadAnchors({ roads, localPolygon, frame }) {
             distanceToRoad: 0,
             edgeIndex,
             segmentIndex: index,
+            outsideTrace: buildOutsideTrace(localLine, index, hit.point, hit.point, localPolygon),
           }),
         );
       }
@@ -1556,6 +1876,7 @@ function findRoadAnchors({ roads, localPolygon, frame }) {
               distanceToRoad: best.distance,
               edgeIndex: bestEdgeIndex,
               segmentIndex: index,
+              outsideTrace: buildOutsideTrace(localLine, index, best.onFirst, best.onSecond, localPolygon),
             }),
           );
         }
@@ -1567,14 +1888,18 @@ function findRoadAnchors({ roads, localPolygon, frame }) {
 }
 
 function makeAnchor(options) {
-  const { local, outside, direction, road, highway, frame, source, priority, distanceToRoad, edgeIndex, segmentIndex } = options;
-  const leadIn = chooseLeadInPoint({ outside, local, direction, localPolygonCentroid: null });
+  const { local, outside, direction, road, highway, frame, source, priority, distanceToRoad, edgeIndex, segmentIndex, outsideTrace } = options;
+  const trace = Array.isArray(outsideTrace) ? outsideTrace.filter(isFinitePoint) : [];
+  // Prefer the real road's first outside vertex as the connection point; fall back
+  // to the synthetic lead-in only when the road has no usable outside geometry.
+  const leadIn = trace.length ? trace[0] : chooseLeadInPoint({ outside, local, direction, localPolygonCentroid: null });
   return {
     id: `${road.properties.osmId}-${edgeIndex}-${segmentIndex}-${source}`,
     local,
     coord: localToLngLat(local, frame),
     outside,
     outsideCoord: localToLngLat(outside, frame),
+    outsideTrace: trace,
     leadIn,
     leadInCoord: localToLngLat(leadIn, frame),
     direction,
@@ -1585,6 +1910,46 @@ function makeAnchor(options) {
     edgeIndex,
     osmId: road.properties.osmId,
   };
+}
+
+// Walk the existing road's own vertices outward from the boundary crossing,
+// collecting the real outside geometry (ordered far -> nearest boundary) so a
+// generated corridor can overlap and continue the actual street instead of a
+// synthetic straight stub. Returns [] for degenerate roads (caller falls back).
+function buildOutsideTrace(localLine, segmentIndex, boundaryPoint, anchorLocal, localPolygon, maxLen = 110) {
+  if (!Array.isArray(localLine) || localLine.length < 2) {
+    return [];
+  }
+  const collect = (startIndex, stepDir) => {
+    const points = [];
+    let accumulated = 0;
+    let previous = boundaryPoint;
+    for (let i = startIndex; i >= 0 && i < localLine.length; i += stepDir) {
+      const vertex = localLine[i];
+      if (!isFinitePoint(vertex) || pointInPolygon(vertex, localPolygon)) {
+        break;
+      }
+      accumulated += distanceLocal(previous, vertex);
+      if (accumulated > maxLen) {
+        break;
+      }
+      points.push(vertex);
+      previous = vertex;
+    }
+    return points;
+  };
+
+  // One side is outside for boundary crossings; both may be outside for
+  // near-boundary roads, so pick the branch reaching farthest from the boundary.
+  const downward = collect(segmentIndex, -1);
+  const upward = collect(segmentIndex + 1, 1);
+  const reach = (points) => (points.length ? distanceLocal(points[points.length - 1], anchorLocal) : -1);
+  const chosen = reach(downward) >= reach(upward) ? downward : upward;
+  if (chosen.length === 0) {
+    return [];
+  }
+  // chosen is nearest -> far; reverse to far -> nearest for path prepending.
+  return chosen.slice().reverse();
 }
 
 function chooseLeadInPoint({ outside, local, direction }) {
@@ -1665,7 +2030,7 @@ function roadSearchRadiusMeters(highway) {
 function generateUrbanLayout({ selectedPolygon, frame, localPolygon, centroid, stats, random, settings, allowWater }) {
   const features = [];
   const localBbox = localBounds(localPolygon);
-  const areaSqm = turf.area(selectedPolygon);
+  const areaSqm = turfArea(selectedPolygon);
   const areaHa = areaSqm / 10000;
   const density = settings.density / 100;
   const green = settings.green / 100;
@@ -1898,7 +2263,7 @@ function buildSparseRoadNetwork({ anchors, centroid, localPolygon, obstacles, ra
     return { features, localRoadSegments, gatewayRoutes, connectorCount };
   }
 
-  const pairedRoutes = buildSparseGatewayRoutes({ anchors, centroid, random, alignment, roadFill });
+  const pairedRoutes = buildSparseGatewayRoutes({ anchors, centroid, random, alignment, roadFill, obstacles, localPolygon });
   for (const route of pairedRoutes) {
     const segments = constrainedLineSegments(route.points, {
       localPolygon,
@@ -1945,7 +2310,7 @@ function buildSparseRoadNetwork({ anchors, centroid, localPolygon, obstacles, ra
       obstacles,
       blockSpacing,
     });
-    const path = buildAlignedConnectorPath(anchor, target, centroid, random, alignment);
+    const path = buildAlignedConnectorPath(anchor, target, centroid, random, alignment, obstacles, localPolygon);
     const segments = constrainedLineSegments(path, {
       localPolygon,
       obstacles,
@@ -1978,7 +2343,7 @@ function buildSparseRoadNetwork({ anchors, centroid, localPolygon, obstacles, ra
   return { features, localRoadSegments, gatewayRoutes, connectorCount };
 }
 
-function buildSparseGatewayRoutes({ anchors, centroid, random, alignment, roadFill }) {
+function buildSparseGatewayRoutes({ anchors, centroid, random, alignment, roadFill, obstacles = [], localPolygon = [] }) {
   const routes = [];
   const used = new Set();
   const routeLimit = Math.round(clamp(roadFill * 2.1, roadFill >= 0.55 ? 1 : 0, 2));
@@ -2008,6 +2373,11 @@ function buildSparseGatewayRoutes({ anchors, centroid, random, alignment, roadFi
       if (distance < 140 && roadFill < 0.86) {
         continue;
       }
+      // Never pair anchors that sit on opposite sides of a river/water body: the
+      // straight corridor between them would cross water and be split into stubs.
+      if (obstacles.length > 0 && lineIntersectsAnyPolygon([anchor.local, candidate.local], obstacles)) {
+        continue;
+      }
       const score = oppositePenalty * 2.8 - Math.min(distance, 1200) * 0.001 + highwayWeight(candidate.highway) * 0.22;
       if (!best || score < best.score) {
         best = { anchor: candidate, score, oppositePenalty };
@@ -2024,14 +2394,14 @@ function buildSparseGatewayRoutes({ anchors, centroid, random, alignment, roadFi
     routes.push({
       id: `${anchor.id}--${best.anchor.id}`,
       anchorIds: [anchor.id, best.anchor.id],
-      points: buildAlignedGatewayPath(anchor, best.anchor, centroid, random, alignment),
+      points: buildAlignedGatewayPath(anchor, best.anchor, centroid, random, alignment, obstacles, localPolygon),
     });
   }
 
   return routes;
 }
 
-function buildAlignedGatewayPath(a, b, centroid, random, alignment) {
+function buildAlignedGatewayPath(a, b, centroid, random, alignment, obstacles = [], localPolygon = []) {
   const straightness = clamp(alignment, 0, 1);
   const distance = distanceLocal(a.local, b.local);
   const shoulderLength = Math.min(160, distance * 0.28);
@@ -2050,20 +2420,26 @@ function buildAlignedGatewayPath(a, b, centroid, random, alignment) {
   const perpendicular = { x: -axis.y, y: axis.x };
   const wobble = clamp(distance * 0.08 * (1 - straightness), 0, 90);
   const coreOffset = randomRange(random, -wobble, wobble);
-  const corePoint = {
+  let corePoint = {
     x: core.x + perpendicular.x * coreOffset,
     y: core.y + perpendicular.y * coreOffset,
   };
+  // When the zone centroid is over water, the corridor bend can land on the
+  // river; pull it back onto dry land so the gateway stays buildable.
+  if (obstacles.length > 0 && pointInAnyPolygon(corePoint, obstacles)) {
+    corePoint = nearestInteriorPoint(corePoint, centroid, localPolygon, obstacles);
+  }
+
+  const aPrefix = anchorOutsidePrefix(a);
+  const bSuffix = anchorOutsideSuffix(b);
 
   if (straightness >= 0.78) {
-    return [a.leadIn, a.outside, a.local, aShoulder, corePoint, bShoulder, b.local, b.outside, b.leadIn];
+    return [...aPrefix, aShoulder, corePoint, bShoulder, ...bSuffix];
   }
 
   const bend = wobble * 0.55;
   return [
-    a.leadIn,
-    a.outside,
-    a.local,
+    ...aPrefix,
     aShoulder,
     {
       x: aShoulder.x + (corePoint.x - aShoulder.x) * 0.46 + perpendicular.x * randomRange(random, -bend, bend),
@@ -2075,13 +2451,26 @@ function buildAlignedGatewayPath(a, b, centroid, random, alignment) {
       y: corePoint.y + (bShoulder.y - corePoint.y) * 0.58 + perpendicular.y * randomRange(random, -bend, bend),
     },
     bShoulder,
-    b.local,
-    b.outside,
-    b.leadIn,
+    ...bSuffix,
   ];
 }
 
-function buildAlignedConnectorPath(anchor, target, centroid, random, alignment) {
+// Lead the path in from the real outside road geometry when available, else from
+// the synthetic lead-in. Prefix runs far -> boundary -> inside (anchor.local).
+function anchorOutsidePrefix(anchor) {
+  return anchor.outsideTrace?.length
+    ? [...anchor.outsideTrace, anchor.outside, anchor.local]
+    : [anchor.leadIn, anchor.outside, anchor.local];
+}
+
+// Mirror of anchorOutsidePrefix for the far end of a gateway: inside -> boundary -> far.
+function anchorOutsideSuffix(anchor) {
+  return anchor.outsideTrace?.length
+    ? [anchor.local, anchor.outside, ...anchor.outsideTrace.slice().reverse()]
+    : [anchor.local, anchor.outside, anchor.leadIn];
+}
+
+function buildAlignedConnectorPath(anchor, target, centroid, random, alignment, obstacles = [], localPolygon = []) {
   const straightness = clamp(alignment, 0, 1);
   const distance = distanceLocal(anchor.local, target);
   const shoulder = {
@@ -2094,16 +2483,21 @@ function buildAlignedConnectorPath(anchor, target, centroid, random, alignment) 
   const axis = normalizeVector({ x: target.x - anchor.local.x, y: target.y - anchor.local.y });
   const perpendicular = { x: -axis.y, y: axis.x };
   const bend = clamp(distance * 0.14 * (1 - straightness), 0, 76);
-  const corePoint = {
+  let corePoint = {
     x: core.x + perpendicular.x * randomRange(random, -bend, bend),
     y: core.y + perpendicular.y * randomRange(random, -bend, bend),
   };
-
-  if (straightness >= 0.82) {
-    return [anchor.leadIn, anchor.outside, anchor.local, shoulder, target];
+  if (obstacles.length > 0 && pointInAnyPolygon(corePoint, obstacles)) {
+    corePoint = nearestInteriorPoint(corePoint, centroid, localPolygon, obstacles);
   }
 
-  return [anchor.leadIn, anchor.outside, anchor.local, shoulder, corePoint, target];
+  const prefix = anchorOutsidePrefix(anchor);
+
+  if (straightness >= 0.82) {
+    return [...prefix, shoulder, target];
+  }
+
+  return [...prefix, shoulder, corePoint, target];
 }
 
 function anchorAngle(anchor, centroid) {
@@ -2235,7 +2629,7 @@ function generateZoning({ localPolygon, frame, localBbox, obstacles, random, set
       const roll = random();
       const parkChance = clamp(green * 0.48 + anchorInfluence, 0.08, 0.5);
       const parkingChance = clamp(parking * 0.28, 0.02, 0.28);
-      const nearWater = pointDistanceToPolygons(jittered, obstacles) < 60;
+      const nearWater = pointDistanceToPolygons(jittered, obstacles, 60) < 60;
 
       if (roll < parkChance || nearWater) {
         const width = randomRange(random, stepX * 0.55, stepX * 1.26);
@@ -2330,7 +2724,7 @@ function estimateWaterAreaInside(obstacles, selectedPolygon, frame) {
   if (obstacles.length === 0) {
     return 0;
   }
-  const selectedArea = turf.area(selectedPolygon);
+  const selectedArea = turfArea(selectedPolygon);
   let area = 0;
   for (const obstacle of obstacles) {
     area += Math.abs(polygonSignedArea(obstacle));
@@ -2340,30 +2734,30 @@ function estimateWaterAreaInside(obstacles, selectedPolygon, frame) {
 
 function updateMetrics(metrics) {
   if (!metrics) {
-    dom.scenarioLabel.textContent = "No scenario yet";
-    dom.areaMetric.textContent = "—";
-    dom.homesMetric.textContent = "—";
-    dom.linksMetric.textContent = "—";
-    dom.waterMetric.textContent = "—";
-    dom.buildingsMetric.textContent = "—";
-    dom.parkingMetric.textContent = "—";
-    dom.reportText.textContent = "Waiting for a valid polygon. Click four or more points, or use the demo zone.";
-    dom.mapHint.textContent = "Click at least four points. Drag cyan vertices. White handles add new points.";
+    emit.onScenario("No scenario yet");
+    emit.onMetrics(null);
+    emit.onReport("Waiting for a valid polygon. Click four or more points, or use the demo zone.");
+    emit.onHint("Click at least four points. Drag vertices to reshape. Plus handles add new points.");
     updatePills(createEmptyContextStats());
     return;
   }
-  dom.scenarioLabel.textContent = state.allowWater ? "Water override scenario" : "Water-protected scenario";
-  dom.areaMetric.textContent = formatMetric(metrics.areaHa, 1);
-  dom.homesMetric.textContent = metrics.homes.toLocaleString();
-  dom.linksMetric.textContent = metrics.roadLinks.toLocaleString();
-  dom.waterMetric.textContent = metrics.waterInsideHa > 0.05 ? `${formatMetric(metrics.waterInsideHa, 1)} ha` : "0 ha";
-  dom.buildingsMetric.textContent = metrics.generatedBuildings.toLocaleString();
-  dom.parkingMetric.textContent = metrics.parkingSpaces.toLocaleString();
-  dom.mapHint.textContent = metrics.roadFill === 0
-    ? "Road fill is 0: no generated roads. Increase Road fill to connect boundary anchors."
-    : metrics.roadLinks > 0
-      ? "Cyan connectors start on highlighted existing basemap/OSM roads; each selected anchor is used once."
-      : "Move an edge closer to existing streets to create exact OSM road snaps.";
+  emit.onScenario(state.allowWater ? "Water override scenario" : "Water-protected scenario");
+  emit.onMetrics({
+    raw: metrics,
+    area: formatMetric(metrics.areaHa, 1),
+    homes: metrics.homes.toLocaleString(),
+    links: metrics.roadLinks.toLocaleString(),
+    water: metrics.waterInsideHa > 0.05 ? `${formatMetric(metrics.waterInsideHa, 1)} ha` : "0 ha",
+    buildings: metrics.generatedBuildings.toLocaleString(),
+    parking: metrics.parkingSpaces.toLocaleString(),
+  });
+  emit.onHint(
+    metrics.roadFill === 0
+      ? "Road fill is 0: no generated roads. Increase Road fill to connect boundary anchors."
+      : metrics.roadLinks > 0
+        ? "Connectors start on highlighted existing basemap/OSM roads; each selected anchor is used once."
+        : "Move an edge closer to existing streets to create exact OSM road snaps.",
+  );
   const waterSentence = metrics.waterProtected
     ? ` Water bodies inside the polygon are hard masks; ${metrics.waterConflictsRemoved} generated feature${metrics.waterConflictsRemoved === 1 ? "" : "s"} touching water were dropped before rendering.`
     : state.allowWater
@@ -2372,27 +2766,23 @@ function updateMetrics(metrics) {
   const roadSentence = metrics.roadFill === 0
     ? "Road fill is 0%, so generated roads are intentionally disabled."
     : `Road fill is ${metrics.roadFill}% and road alignment is ${metrics.roadAlignment}%, so the generator connects ${metrics.roadLinks} selected boundary anchors once instead of filling the whole polygon with a grid.`;
-  dom.reportText.textContent = `The plan generated ${metrics.generatedBuildings} building footprints and ${metrics.parkingSpaces.toLocaleString()} parking spaces. ${roadSentence} It used ${metrics.contextRoads} nearby road geometries and ${metrics.contextWater} water features as context.${waterSentence}`;
+  emit.onReport(`The plan generated ${metrics.generatedBuildings} building footprints and ${metrics.parkingSpaces.toLocaleString()} parking spaces. ${roadSentence} It used ${metrics.contextRoads} nearby road geometries and ${metrics.contextWater} water features as context.${waterSentence}`);
 }
 
 function updatePills(stats) {
-  dom.roadsPill.textContent = stats.roads.length.toLocaleString();
-  dom.waterPill.textContent = stats.water.length.toLocaleString();
-  dom.anchorsPill.textContent = stats.anchors.length.toLocaleString();
+  emit.onPills({
+    roads: stats.roads.length,
+    water: stats.water.length,
+    anchors: stats.anchors.length,
+  });
 }
 
 function setStatus(progress, text) {
-  dom.progressBar.style.width = `${clamp(progress, 8, 100)}%`;
-  dom.statusText.textContent = text;
+  emit.onStatus(clamp(progress, 8, 100), text);
 }
 
 function showToast(text) {
-  dom.toast.textContent = text;
-  dom.toast.classList.add("visible");
-  window.clearTimeout(state.toastTimer);
-  state.toastTimer = window.setTimeout(() => {
-    dom.toast.classList.remove("visible");
-  }, 3600);
+  emit.onToast(text);
 }
 
 function localLineFeature(points, frame, properties) {
@@ -2427,7 +2817,7 @@ function localPolygonFeature(points, frame, properties) {
 }
 
 function createLocalFrame(polygon) {
-  const center = turf.centroid(polygon).geometry.coordinates;
+  const center = turfCentroid(polygon).geometry.coordinates;
   return {
     center,
     cosLat: Math.cos(center[1] * DEG_TO_RAD),
@@ -2598,8 +2988,44 @@ function pointInPolygonLoose(point, polygon, toleranceMeters) {
   return nearest && nearest.distance <= toleranceMeters;
 }
 
+function ensureObstacleBounds(obstacle) {
+  if (!obstacle._bounds) {
+    obstacle._bounds = localBounds(obstacle);
+  }
+  return obstacle._bounds;
+}
+
+function localBboxesOverlap(a, b, pad = 0) {
+  return (
+    a.minX - pad <= b.maxX + pad &&
+    a.maxX + pad >= b.minX - pad &&
+    a.minY - pad <= b.maxY + pad &&
+    a.maxY + pad >= b.minY - pad
+  );
+}
+
+function segmentLocalBbox(a, b, pad = 0) {
+  return {
+    minX: Math.min(a.x, b.x) - pad,
+    maxX: Math.max(a.x, b.x) + pad,
+    minY: Math.min(a.y, b.y) - pad,
+    maxY: Math.max(a.y, b.y) + pad,
+  };
+}
+
 function pointInAnyPolygon(point, polygons) {
-  return polygons.some((polygon) => pointInPolygonLoose(point, polygon, 0.4));
+  return polygons.some((polygon) => {
+    const bounds = ensureObstacleBounds(polygon);
+    if (
+      point.x < bounds.minX - 0.4 ||
+      point.x > bounds.maxX + 0.4 ||
+      point.y < bounds.minY - 0.4 ||
+      point.y > bounds.maxY + 0.4
+    ) {
+      return false;
+    }
+    return pointInPolygonLoose(point, polygon, 0.4);
+  });
 }
 
 function lineIntersectsAnyPolygon(points, polygons) {
@@ -2618,7 +3044,14 @@ function lineIntersectsAnyPolygon(points, polygons) {
 }
 
 function segmentIntersectsAnyPolygon(a, b, polygons) {
-  return polygons.some((polygon) => segmentIntersectsPolygon(a, b, polygon));
+  const segmentBounds = segmentLocalBbox(a, b, 0.2);
+  return polygons.some((polygon) => {
+    const bounds = ensureObstacleBounds(polygon);
+    if (!localBboxesOverlap(segmentBounds, bounds)) {
+      return false;
+    }
+    return segmentIntersectsPolygon(a, b, polygon);
+  });
 }
 
 function segmentIntersectsPolygon(a, b, polygon) {
@@ -2629,10 +3062,17 @@ function segmentIntersectsPolygon(a, b, polygon) {
 }
 
 function polygonIntersectsAnyPolygon(poly, polygons) {
-  if (polygons.length === 0) {
+  if (polygons.length === 0 || poly.length === 0) {
     return false;
   }
-  return polygons.some((obstacle) => polygonsIntersect(poly, obstacle));
+  const polyBounds = localBounds(poly);
+  return polygons.some((obstacle) => {
+    const bounds = ensureObstacleBounds(obstacle);
+    if (!localBboxesOverlap(polyBounds, bounds)) {
+      return false;
+    }
+    return polygonsIntersect(poly, obstacle);
+  });
 }
 
 function polygonsIntersect(a, b) {
@@ -2654,15 +3094,29 @@ function polygonsIntersect(a, b) {
   return false;
 }
 
-function pointDistanceToPolygons(point, polygons) {
+function pointDistanceToBoundsLowerBound(point, bounds) {
+  const dx = Math.max(bounds.minX - point.x, 0, point.x - bounds.maxX);
+  const dy = Math.max(bounds.minY - point.y, 0, point.y - bounds.maxY);
+  return Math.hypot(dx, dy);
+}
+
+// `maxDistance` lets callers that only care about proximity (e.g. "is this within
+// 60 m of water?") cap the search so far-away obstacles are rejected by a cheap
+// bbox test before the O(edges) boundary scan. The bbox distance is always a
+// lower bound on the true boundary distance, so skipping never changes results.
+function pointDistanceToPolygons(point, polygons, maxDistance = Infinity) {
   if (polygons.length === 0) {
     return Infinity;
   }
-  let best = Infinity;
+  let best = maxDistance;
   for (const polygon of polygons) {
+    const bounds = ensureObstacleBounds(polygon);
+    if (pointDistanceToBoundsLowerBound(point, bounds) >= best) {
+      continue;
+    }
     const nearest = nearestPointOnPolygonBoundary(point, polygon);
-    if (nearest) {
-      best = Math.min(best, nearest.distance);
+    if (nearest && nearest.distance < best) {
+      best = nearest.distance;
     }
   }
   return best;
@@ -2843,8 +3297,10 @@ function formatMetric(value, digits = 0) {
   });
 }
 
-return () => {
-  window.clearTimeout(state.generationTimer);
+function destroy() {
+  if (state.generationRaf !== null) {
+    cancelAnimationFrame(state.generationRaf);
+  }
   window.clearTimeout(state.contextTimer);
   window.clearTimeout(state.toastTimer);
   state.contextFetchController?.abort();
@@ -2855,5 +3311,16 @@ return () => {
     marker.remove();
   }
   map.remove();
+}
+
+return {
+  setSetting,
+  setTheme,
+  setAllowWater,
+  loadDemo: () => loadDemoZone(true),
+  clearZone,
+  undo: undoVertex,
+  fit: fitToZone,
+  destroy,
 };
 }

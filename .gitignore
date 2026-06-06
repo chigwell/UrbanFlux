@@ -143,3 +143,8 @@ vite.config.ts.timestamp-*
 .vite/
 
 .agents
+# Playwright MCP screenshots
+.playwright-mcp/
+
+# Next.js TS env
+frontend/next-env.d.ts
