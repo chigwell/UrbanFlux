@@ -63,7 +63,7 @@ User edits polygon → debounced handlers → render. Two parallel debounced pat
 - `backend/main.py`: FastAPI route layer and public import surface. Implementation is split across `schemas.py`, `population.py`, `impact.py`, `borough_context.py`, and `nemotron_adapter.py`.
 - Public backend routes: `GET /`, `GET /hello`, `POST /population`, `POST /impact`, and `GET /borough-data-test`.
 - `/impact` computes deterministic London-data-first metrics first. Nemotron refinement is optional and falls back when `FAL_KEY` or `fal_client` is absent, the call times out, or the model returns invalid metric JSON.
-- `backend/nemotron.py` is a legacy manual script for recommendation-style experiments; it is not imported by the FastAPI server.
+- `backend/nemotron.py` is a standalone recommendation script; it is not imported by the FastAPI server.
 - `.github/workflows/deploy.yml` runs on push to `main`:
   - Frontend → builds and deploys `frontend/out` to **Cloudflare Pages** (needs `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_PROJECT_NAME`).
   - Backend → rsyncs `backend/` to a VPS at `/opt/urbanflux/backend`, reinstalls deps, restarts the `urbanflux-backend` systemd service (needs `VPS_*` secrets; see `backend/README.md` for the exact systemd command and secret values).

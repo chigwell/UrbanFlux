@@ -41,11 +41,11 @@ CI runs the same backend test suite on Python 3.12.
 
 ## Nemotron Behavior
 
-`/impact` always computes deterministic London-data-first metrics first. The Nemotron adapter is isolated in `nemotron_adapter.py` and falls back to those deterministic metrics when `FAL_KEY` is absent, `fal_client` is not installed, the call times out, or the model output is not valid metric JSON.
+`/impact` always computes deterministic London-data-first metrics first. If `fal_client` is available and `FAL_KEY` is set, the API attempts a Nemotron refinement and falls back to deterministic metrics when the call times out or returns invalid metric JSON.
 
-`fal-client` and `python-dotenv` are intentionally not part of `requirements.txt` in this refactor. Enabling live Nemotron in production should be a separate dependency/deploy migration.
+The standard backend install works without live Nemotron credentials. To run live Nemotron refinement, install the provider client package used by `nemotron_adapter.py` and set `FAL_KEY` in the backend environment.
 
-`nemotron.py` is a legacy manual script for recommendation-style experiments. It is not imported by the FastAPI server.
+`nemotron.py` is a standalone recommendation script. It is not imported by the FastAPI server.
 
 ## Backend Layout
 
@@ -76,7 +76,7 @@ The workflow installs Python dependencies on the VPS, ensures the mapped London 
 - `VPS_SSH_PRIVATE_KEY`
 - `VPS_SSH_PORT`
 - `VPS_SERVICE_NAME`
-- `FAL_KEY` only if a future migration enables live Nemotron dependencies
+- `FAL_KEY` when live Nemotron refinement is enabled
 
 Current expected values:
 
