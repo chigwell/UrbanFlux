@@ -1,4 +1,4 @@
-name: Deploy frontend to Cloudflare Pages
+name: Deploy frontend and backend
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   deploy-frontend:
-    name: Build and deploy frontend
+    name: Deploy frontend to Cloudflare Pages
     runs-on: ubuntu-latest
 
     defaults:
@@ -41,3 +41,58 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: frontend
           command: pages deploy out --project-name=${{ secrets.CLOUDFLARE_PROJECT_NAME }} --branch=main
+
+  deploy-backend:
+    name: Deploy FastAPI backend to VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_PRIVATE_KEY }}" > ~/.ssh/urbanflux_deploy_key
+          chmod 600 ~/.ssh/urbanflux_deploy_key
+
+      - name: Upload backend source
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_SSH_PORT || '22' }}
+        run: |
+          rsync -az --delete \
+            --exclude ".venv" \
+            --exclude "__pycache__" \
+            --exclude ".pytest_cache" \
+            --exclude ".mypy_cache" \
+            --exclude ".git" \
+            -e "ssh -i ~/.ssh/urbanflux_deploy_key -p ${VPS_PORT} -o StrictHostKeyChecking=no" \
+            backend/ \
+            ${VPS_USER}@${VPS_HOST}:/opt/urbanflux/backend/
+
+      - name: Install dependencies and restart backend service
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_SSH_PORT || '22' }}
+          BACKEND_SERVICE: ${{ secrets.VPS_SERVICE_NAME || 'urbanflux-backend' }}
+        run: |
+          ssh -i ~/.ssh/urbanflux_deploy_key -p "${VPS_PORT}" -o StrictHostKeyChecking=no \
+            ${VPS_USER}@${VPS_HOST} << EOF
+          set -euo pipefail
+          TARGET_DIR="/opt/urbanflux/backend"
+          SERVICE_NAME="${BACKEND_SERVICE}"
+
+          cd "${TARGET_DIR}"
+          if [ ! -d ".venv" ]; then
+            python3 -m venv .venv
+          fi
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          sudo systemctl daemon-reload
+          sudo systemctl restart "${SERVICE_NAME}"
+          sudo systemctl --no-pager status "${SERVICE_NAME}"
+          EOF
