@@ -1,13 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
-import { ArrowLeftIcon, MoonIcon, SparklesIcon, SunIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
+import { sleep } from "@/lib/abortable";
 import type {
   AutoImprovementMode,
   CityTwinHandle,
@@ -18,84 +14,14 @@ import type {
   CityTwinSettingKey,
   CityTwinSettings,
 } from "@/lib/cityTwinMap";
-import { BottomSheet } from "./BottomSheet";
-import { ControlsCard } from "./ControlsCard";
-import { DashboardCard } from "./DashboardCard";
-import { IntroCard } from "./IntroCard";
-import { LegendCard } from "./LegendCard";
-import { PopulationCard } from "./PopulationCard";
-import { StatusCard } from "./StatusCard";
-
-const DEFAULT_SETTINGS: CityTwinSettings = {
-  density: 64,
-  green: 35,
-  parking: 18,
-  street: 35,
-  alignment: 72,
-  height: 58,
-};
-
-const AUTO_TIMING = {
-  londonOverviewMs: 1600,
-  pauseAfterOverviewMs: 450,
-  vertexRevealMs: 900,
-  fitToZoneMs: 1200,
-  waitForInitialPlanTimeoutMs: 12000,
-  parameterStepMs: 320,
-  waitForImprovedPlanTimeoutMs: 8000,
-  orbitMoveMs: 8500,
-};
-
-const SETTING_LIMITS: Record<CityTwinSettingKey, { min: number; max: number }> =
-  {
-    density: { min: 5, max: 100 },
-    green: { min: 5, max: 80 },
-    parking: { min: 0, max: 80 },
-    street: { min: 0, max: 100 },
-    alignment: { min: 0, max: 100 },
-    height: { min: 0, max: 100 },
-  };
-
-const sleep = (ms: number, signal: AbortSignal) =>
-  new Promise<void>((resolve, reject) => {
-    if (signal.aborted) {
-      reject(new DOMException("Aborted", "AbortError"));
-      return;
-    }
-
-    const timer = window.setTimeout(resolve, ms);
-
-    signal.addEventListener(
-      "abort",
-      () => {
-        window.clearTimeout(timer);
-        reject(new DOMException("Aborted", "AbortError"));
-      },
-      { once: true },
-    );
-  });
-
-const randomInt = (min: number, max: number) =>
-  Math.floor(min + Math.random() * (max - min + 1));
-
-const clampSetting = (key: CityTwinSettingKey, value: number) => {
-  const limit = SETTING_LIMITS[key];
-  return Math.max(limit.min, Math.min(limit.max, value));
-};
-
-const buildRandomGreenerSettings = (
-  current: CityTwinSettings,
-): CityTwinSettings => ({
-  density: clampSetting("density", randomInt(58, 88)),
-  green: clampSetting(
-    "green",
-    Math.max(current.green + randomInt(18, 32), randomInt(62, 78)),
-  ),
-  parking: clampSetting("parking", randomInt(4, 16)),
-  street: clampSetting("street", randomInt(46, 74)),
-  alignment: clampSetting("alignment", randomInt(54, 86)),
-  height: clampSetting("height", randomInt(48, 82)),
-});
+import { CityTwinLayout } from "./CityTwinLayout";
+import {
+  AUTO_TIMING,
+  DEFAULT_SETTINGS,
+  buildRandomGreenerSettings,
+  clampSetting,
+} from "./settings";
+import { useCityTwinMapLifecycle } from "./useCityTwinMapLifecycle";
 
 export function CityTwinApp() {
   const { resolvedTheme, setTheme } = useTheme();
@@ -151,43 +77,20 @@ export function CityTwinApp() {
     settingsRef.current = settings;
   }, [settings]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const initialDark = document.documentElement.classList.contains("dark");
-
-    import("@/lib/cityTwinMap").then(({ initCityTwinMap }) => {
-      if (cancelled) {
-        return;
-      }
-      const handle = initCityTwinMap({
-        container: "map",
-        initialTheme: initialDark ? "dark" : "light",
-        initialAllowWater: false,
-        initialSettings: DEFAULT_SETTINGS,
-        onStatus: (value, text) => {
-          setProgress(value);
-          setStatus(text);
-        },
-        onMetrics: setMetrics,
-        onPopulation: setPopulation,
-        onImpact: setImpact,
-        onScenario: setScenario,
-        onReport: setReport,
-        onHint: setHint,
-        onPills: setPills,
-        onToast: (text) => toast(text),
-        onAutoInterrupted: () => stopAutoImprovement("manual"),
-      });
-      handleRef.current = handle;
-    });
-
-    return () => {
-      cancelled = true;
-      stopAutoImprovement("unmount");
-      handleRef.current?.destroy();
-      handleRef.current = null;
-    };
-  }, [stopAutoImprovement]);
+  useCityTwinMapLifecycle({
+    handleRef,
+    initialSettings: DEFAULT_SETTINGS,
+    stopAutoImprovement,
+    setProgress,
+    setStatus,
+    setMetrics,
+    setPopulation,
+    setImpact,
+    setScenario,
+    setReport,
+    setHint,
+    setPills,
+  });
 
   const isDark = mounted ? resolvedTheme === "dark" : false;
 
@@ -348,140 +251,36 @@ export function CityTwinApp() {
     action();
   };
 
-  const homeButton = (
-    <div className="flex w-fit items-stretch gap-2 border-[0.5px] bg-card px-3 py-2 shadow-sm">
-      <div className="flex items-center">
-        <Button asChild size="sm" variant="ghost">
-          <Link href="/" className="hover:bg-transparent">
-            <ArrowLeftIcon data-icon="inline-start" />
-            Home
-          </Link>
-        </Button>
-      </div>
-      <Separator orientation="vertical" />
-      <div className="flex items-center gap-2 text-sm font-medium">
-        {isDark ? (
-          <MoonIcon className="size-4" aria-hidden />
-        ) : (
-          <SunIcon className="size-4" aria-hidden />
-        )}
-        <span className="hidden sm:inline">
-          {isDark ? "Dark" : "Light"} basemap
-        </span>
-        <Switch
-          checked={isDark}
-          onCheckedChange={handleToggleTheme}
-          aria-label="Toggle basemap theme"
-        />
-      </div>
-    </div>
-  );
-
-  const controlsCard = (
-    <ControlsCard
+  return (
+    <CityTwinLayout
+      isDark={isDark}
       settings={settings}
       allowWater={allowWater}
       autoRunning={autoRunning}
       autoMode={autoMode}
       controlsOpen={controlsOpen}
+      bottomSheetExpanded={bottomSheetExpanded}
+      progress={progress}
+      status={status}
+      pills={pills}
+      metrics={metrics}
+      population={population}
+      impact={impact}
+      scenario={scenario}
+      report={report}
+      hint={hint}
       onControlsOpenChange={setControlsOpen}
+      onBottomSheetExpandedChange={setBottomSheetExpanded}
       onStartAutoImprovement={() => void startAutoImprovement()}
       onStopAutoImprovement={() => stopAutoImprovement("stop")}
       onRestartAutoImprovement={restartAutoImprovement}
       onSetting={handleSetting}
       onAllowWater={handleAllowWater}
+      onToggleTheme={handleToggleTheme}
       onDemo={() => runManualAction(() => handleRef.current?.loadDemo())}
       onUndo={() => runManualAction(() => handleRef.current?.undo())}
       onClear={() => runManualAction(() => handleRef.current?.clearZone())}
       onFit={() => runManualAction(() => handleRef.current?.fit())}
     />
-  );
-
-  return (
-    <div className="relative h-dvh w-full overflow-hidden bg-background">
-      <div id="map" />
-
-      {autoRunning ? (
-        <div className="absolute left-1/2 top-3 z-40 flex -translate-x-1/2 items-center gap-2 border-[0.5px] bg-card px-3 py-2 shadow-sm">
-          <span className="hidden items-center gap-1 text-xs text-muted-foreground sm:flex">
-            <SparklesIcon className="size-3.5" />
-            Auto improvement
-          </span>
-          <Button
-            size="sm"
-            variant="destructive"
-            onClick={() => stopAutoImprovement("stop")}
-          >
-            Stop
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={restartAutoImprovement}
-          >
-            Restart
-          </Button>
-        </div>
-      ) : null}
-
-      {/* Desktop: two floating columns. Hidden on mobile in favour of the sheet. */}
-      <div className="absolute left-4 top-4 z-10 hidden w-[min(21rem,calc(100vw-2rem))] flex-col gap-2.5 md:flex">
-        {homeButton}
-        <IntroCard />
-        <StatusCard progress={progress} status={status} pills={pills} />
-      </div>
-
-      <div className="absolute right-4 top-4 z-10 hidden max-h-[calc(100dvh-2rem)] w-[min(22rem,calc(100vw-2rem))] flex-col gap-2.5 overflow-y-auto pb-2 *:shrink-0 md:flex">
-        {controlsCard}
-        <LegendCard />
-        <PopulationCard
-          population={population}
-          heightAmbition={settings.height}
-        />
-        <DashboardCard
-          scenario={scenario}
-          metrics={metrics}
-          impact={impact}
-          report={report}
-          layoutId="analytics-desktop"
-        />
-      </div>
-
-      <div className="pointer-events-none absolute inset-x-0 bottom-5 z-10 hidden justify-center px-4 md:flex">
-        <p className="pointer-events-auto max-w-xl border-[0.5px] bg-card px-4 py-2 text-center text-xs text-muted-foreground">
-          {hint}
-        </p>
-      </div>
-
-      {/* Mobile: a floating Home button + a single draggable bottom sheet. */}
-      <div className="absolute left-3 top-3 z-30 md:hidden">{homeButton}</div>
-      <BottomSheet
-        expanded={bottomSheetExpanded}
-        onExpandedChange={setBottomSheetExpanded}
-        peek={
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm font-medium">Controls &amp; insights</span>
-          </div>
-        }
-      >
-        <div className="flex flex-col gap-2.5 py-1 *:shrink-0">
-          {controlsCard}
-          <PopulationCard
-            population={population}
-            heightAmbition={settings.height}
-          />
-          <DashboardCard
-            scenario={scenario}
-            metrics={metrics}
-            impact={impact}
-            report={report}
-            layoutId="analytics-mobile"
-          />
-          <StatusCard progress={progress} status={status} pills={pills} />
-          <LegendCard />
-          <IntroCard />
-        </div>
-      </BottomSheet>
-    </div>
   );
 }

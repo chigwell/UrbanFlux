@@ -17,57 +17,7 @@ import type {
   CityTwinSettings,
 } from "@/lib/cityTwinMap";
 import { CollapsiblePanel } from "./CollapsiblePanel";
-
-const SLIDERS: {
-  key: CityTwinSettingKey;
-  label: string;
-  min: number;
-  max: number;
-  hint: string;
-}[] = [
-  {
-    key: "density",
-    label: "Housing density",
-    min: 5,
-    max: 100,
-    hint: "Homes per built block",
-  },
-  {
-    key: "green",
-    label: "Green space target",
-    min: 5,
-    max: 80,
-    hint: "Share reserved as parks",
-  },
-  {
-    key: "parking",
-    label: "Parking pressure",
-    min: 0,
-    max: 80,
-    hint: "Surface parking demand",
-  },
-  {
-    key: "street",
-    label: "Road fill",
-    min: 0,
-    max: 100,
-    hint: "Boundary anchors connected",
-  },
-  {
-    key: "alignment",
-    label: "Road alignment",
-    min: 0,
-    max: 100,
-    hint: "How straight corridors run",
-  },
-  {
-    key: "height",
-    label: "Height ambition",
-    min: 0,
-    max: 100,
-    hint: "Massing of tall buildings",
-  },
-];
+import { SETTING_CONTROLS } from "./settings";
 
 interface ControlsCardProps {
   settings: CityTwinSettings;
@@ -212,7 +162,7 @@ export function ControlsCard({
         <Separator />
 
         <div className="flex flex-col gap-4">
-          {SLIDERS.map((slider) => (
+          {SETTING_CONTROLS.map((slider) => (
             <div key={slider.key} className="flex flex-col gap-2">
               <div className="flex items-baseline justify-between gap-2">
                 <span className="text-sm font-medium">{slider.label}</span>

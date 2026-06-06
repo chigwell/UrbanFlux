@@ -13,6 +13,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import main  # noqa: E402
+import nemotron_adapter  # noqa: E402
 from utils import _format_latest_theme_row  # noqa: E402
 
 
@@ -125,6 +126,8 @@ def test_impact_endpoint_returns_replanning_metrics(monkeypatch) -> None:
     assert payload["metrics"][0]["methodology_source"] == main._METHODOLOGY_TFL_STREETS
     assert "Mapped Westminster transport row" in payload["metrics"][0]["basis"]
     assert payload["note"] == "London Datastore mapped estimates for Westminster"
+    assert payload["calculation_engine"] == "deterministic_fallback"
+    assert payload["calculation_reason"] == "fal_key_missing"
 
 
 def test_default_heat_metric_is_local_and_capped() -> None:
@@ -343,8 +346,45 @@ def test_fetch_borough_context_handles_missing_borough(monkeypatch) -> None:
 
 def test_call_nemotron_returns_none_without_fal_key(monkeypatch) -> None:
     monkeypatch.delenv("FAL_KEY", raising=False)
+    monkeypatch.setattr(nemotron_adapter, "_ENV_FILE", Path("/tmp/urbanflux-missing.env"))
 
-    assert main._call_nemotron("prompt") is None
+    metrics, reason = main._call_nemotron("prompt")
+
+    assert metrics is None
+    assert reason == "fal_key_missing"
+
+
+def test_call_nemotron_reads_fal_key_from_env_file(monkeypatch, tmp_path) -> None:
+    source = "https://data.london.gov.uk/dataset/example/"
+    env_file = tmp_path / ".env"
+    env_file.write_text("FAL_KEY=file-key\n", encoding="utf-8")
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    monkeypatch.setattr(nemotron_adapter, "_ENV_FILE", env_file)
+    monkeypatch.setitem(
+        sys.modules,
+        "fal_client",
+        types.SimpleNamespace(
+            subscribe=lambda *args, **kwargs: {
+                "output": json.dumps(
+                    [
+                        {
+                            "improved_metric": "Housing capacity",
+                            "improved_value": "+1%",
+                            "delta": "+1% vs baseline",
+                            "source": source,
+                            "methodology_source": "",
+                            "basis": "Mapped data",
+                        }
+                    ]
+                )
+            }
+        ),
+    )
+
+    metrics, reason = main._call_nemotron("prompt")
+
+    assert metrics is not None
+    assert reason == "nemotron_refinement_succeeded"
 
 
 def test_call_nemotron_parses_valid_json(monkeypatch) -> None:
@@ -371,9 +411,10 @@ def test_call_nemotron_parses_valid_json(monkeypatch) -> None:
         ),
     )
 
-    metrics = main._call_nemotron("prompt")
+    metrics, reason = main._call_nemotron("prompt")
 
     assert metrics is not None
+    assert reason == "nemotron_refinement_succeeded"
     assert metrics[0].improved_metric == "Housing capacity"
     assert metrics[0].source == source
 
@@ -386,7 +427,10 @@ def test_call_nemotron_returns_none_for_invalid_json(monkeypatch) -> None:
         types.SimpleNamespace(subscribe=lambda *args, **kwargs: {"output": "not json"}),
     )
 
-    assert main._call_nemotron("prompt") is None
+    metrics, reason = main._call_nemotron("prompt")
+
+    assert metrics is None
+    assert reason == "invalid_metric_json"
 
 
 def test_nemotron_impact_metrics_falls_back_when_unavailable(monkeypatch) -> None:
@@ -399,9 +443,9 @@ def test_nemotron_impact_metrics_falls_back_when_unavailable(monkeypatch) -> Non
             source=source,
         )
     ]
-    monkeypatch.setattr(main, "_call_nemotron", lambda prompt: None)
+    monkeypatch.setattr(main, "_call_nemotron", lambda prompt: (None, "fal_key_missing"))
 
-    metrics, note = main._nemotron_impact_metrics(
+    metrics, note, calculation_engine, calculation_reason = main._nemotron_impact_metrics(
         population=2480,
         area_km2=0.42,
         params=main.ReplanningParams(),
@@ -413,6 +457,8 @@ def test_nemotron_impact_metrics_falls_back_when_unavailable(monkeypatch) -> Non
 
     assert metrics == london_metrics
     assert note == "London Datastore mapped estimates for Westminster"
+    assert calculation_engine == "deterministic_fallback"
+    assert calculation_reason == "fal_key_missing"
 
 
 def test_nemotron_impact_metrics_blanks_unallowed_refined_sources(monkeypatch) -> None:
@@ -429,23 +475,26 @@ def test_nemotron_impact_metrics_blanks_unallowed_refined_sources(monkeypatch) -
     monkeypatch.setattr(
         main,
         "_call_nemotron",
-        lambda prompt: [
-            main.ImpactMetric(
-                improved_metric="Housing capacity",
-                improved_value="+2%",
-                delta="+2% vs baseline",
-                source=allowed_source,
-            ),
-            main.ImpactMetric(
-                improved_metric="Invented",
-                improved_value="99",
-                delta="99",
-                source="https://invented.example/source",
-            ),
-        ],
+        lambda prompt: (
+            [
+                main.ImpactMetric(
+                    improved_metric="Housing capacity",
+                    improved_value="+2%",
+                    delta="+2% vs baseline",
+                    source=allowed_source,
+                ),
+                main.ImpactMetric(
+                    improved_metric="Invented",
+                    improved_value="99",
+                    delta="99",
+                    source="https://invented.example/source",
+                ),
+            ],
+            "nemotron_refinement_succeeded",
+        ),
     )
 
-    metrics, note = main._nemotron_impact_metrics(
+    metrics, note, calculation_engine, calculation_reason = main._nemotron_impact_metrics(
         population=2480,
         area_km2=0.42,
         params=main.ReplanningParams(),
@@ -456,6 +505,8 @@ def test_nemotron_impact_metrics_blanks_unallowed_refined_sources(monkeypatch) -
     )
 
     assert note == "Refined by Nvidia Nemotron using real Westminster data"
+    assert calculation_engine == "nemotron"
+    assert calculation_reason == "nemotron_refinement_succeeded"
     assert metrics[0].source == allowed_source
     assert metrics[1].source == ""
 

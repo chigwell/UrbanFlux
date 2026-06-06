@@ -116,9 +116,12 @@ jobs:
           FAL_KEY: ${{ secrets.FAL_KEY }}
         run: |
           umask 077
-          cat > /tmp/urbanflux-backend.env << EOF
-          FAL_KEY=${FAL_KEY}
-          EOF
+          if [ -z "${FAL_KEY}" ]; then
+            echo "FAL_KEY GitHub secret is empty or unavailable to this workflow." >&2
+            exit 1
+          fi
+
+          printf 'FAL_KEY=%s\n' "${FAL_KEY}" > /tmp/urbanflux-backend.env
 
           scp -i ~/.ssh/urbanflux_deploy_key -P "${VPS_PORT}" \
             -o StrictHostKeyChecking=no -o BatchMode=yes -o IdentitiesOnly=yes \
@@ -140,10 +143,15 @@ jobs:
           TARGET_DIR="/opt/urbanflux/backend"
           SERVICE_NAME="${BACKEND_SERVICE}"
 
-          sudo -n apt-get update
-          sudo -n apt-get install -y python3-venv python3-pip rsync
+          command -v python3 >/dev/null
+          command -v rsync >/dev/null
 
           cd "${TARGET_DIR}"
+          if [ ! -s ".env" ] || ! grep -q '^FAL_KEY=.' ".env"; then
+            echo "Backend .env is missing FAL_KEY on the VPS." >&2
+            exit 1
+          fi
+
           if [ ! -f ".venv/bin/activate" ]; then
             rm -rf .venv
             python3 -m venv .venv
@@ -156,7 +164,8 @@ jobs:
             python data_sources/setup_london_mapped_data.py
           fi
 
-          sudo -n systemctl daemon-reload
+          chmod 600 ".env"
+
           sudo -n systemctl restart "${SERVICE_NAME}"
           sudo -n systemctl --no-pager status "${SERVICE_NAME}"
           EOF

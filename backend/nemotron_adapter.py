@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from pathlib import Path
 from typing import Callable
 
 from impact import _normalise_source_url
@@ -43,6 +44,26 @@ Example output format:
 
 
 _NEMOTRON_TIMEOUT_S = 12
+_ENV_FILE = Path(__file__).resolve().with_name(".env")
+
+
+def _get_fal_key() -> str:
+    fal_key = os.getenv("FAL_KEY", "").strip()
+    if fal_key:
+        return fal_key
+
+    try:
+        for line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            if key.strip() == "FAL_KEY":
+                return value.strip().strip("'\"")
+    except OSError:
+        return ""
+
+    return ""
 
 
 def _validate_metric_sources(metrics: list[ImpactMetric], allowed_sources: set[str]) -> list[ImpactMetric]:
@@ -76,19 +97,19 @@ def _metrics_to_text(metrics: list[ImpactMetric]) -> str:
     )
 
 
-def _call_nemotron(prompt: str) -> list[ImpactMetric] | None:
+def _call_nemotron(prompt: str) -> tuple[list[ImpactMetric] | None, str]:
     """
     Call Nemotron via fal.ai and parse the structured JSON response.
-    Returns None if the call fails or returns unparseable output.
+    Returns metrics plus a stable reason code for browser diagnostics.
     """
+    fal_key = _get_fal_key()
+    if not fal_key:
+        return None, "fal_key_missing"
+
     try:
         import fal_client
     except ImportError:
-        return None
-
-    fal_key = os.getenv("FAL_KEY")
-    if not fal_key:
-        return None
+        return None, "fal_client_unavailable"
 
     try:
         result = fal_client.subscribe(
@@ -100,8 +121,8 @@ def _call_nemotron(prompt: str) -> list[ImpactMetric] | None:
             },
             with_logs=False,
         )
-    except Exception:
-        return None
+    except Exception as exc:
+        return None, f"nemotron_call_failed:{type(exc).__name__}"
 
     raw = (
         result.get("output")
@@ -113,7 +134,7 @@ def _call_nemotron(prompt: str) -> list[ImpactMetric] | None:
     try:
         parsed = json.loads(raw)
         if not isinstance(parsed, list):
-            return None
+            return None, "invalid_metric_json"
         metrics = []
         for item in parsed:
             if not isinstance(item, dict):
@@ -128,9 +149,11 @@ def _call_nemotron(prompt: str) -> list[ImpactMetric] | None:
                     basis=str(item.get("basis", "")),
                 )
             )
-        return metrics if metrics else None
+        if not metrics:
+            return None, "invalid_metric_json"
+        return metrics, "nemotron_refinement_succeeded"
     except Exception:
-        return None
+        return None, "invalid_metric_json"
 
 
 def _nemotron_impact_metrics(
@@ -141,8 +164,8 @@ def _nemotron_impact_metrics(
     borough_name: str,
     borough_rows: str,
     borough_sources: set[str],
-    call_nemotron: Callable[[str], list[ImpactMetric] | None] | None = None,
-) -> tuple[list[ImpactMetric], str]:
+    call_nemotron: Callable[[str], tuple[list[ImpactMetric] | None, str]] | None = None,
+) -> tuple[list[ImpactMetric], str, str, str]:
     """
     Try to get Nemotron-refined metrics within the timeout window.
     Falls back to London-data-first deterministic metrics if Nemotron is too
@@ -181,12 +204,20 @@ Return the refined JSON array of impact metrics."""
 
     call_nemotron = call_nemotron or _call_nemotron
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(call_nemotron, prompt)
-        try:
-            nemotron_metrics = future.result(timeout=_NEMOTRON_TIMEOUT_S)
-        except FuturesTimeoutError:
-            nemotron_metrics = None
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(call_nemotron, prompt)
+    try:
+        nemotron_metrics, calculation_reason = future.result(timeout=_NEMOTRON_TIMEOUT_S)
+    except FuturesTimeoutError:
+        nemotron_metrics = None
+        calculation_reason = "nemotron_timeout"
+        executor.shutdown(wait=False, cancel_futures=True)
+    except Exception as exc:
+        nemotron_metrics = None
+        calculation_reason = f"nemotron_call_failed:{type(exc).__name__}"
+        executor.shutdown(wait=True)
+    else:
+        executor.shutdown(wait=True)
 
     if nemotron_metrics:
         nemotron_metrics = _validate_metric_sources(nemotron_metrics, allowed_sources)
@@ -195,7 +226,7 @@ Return the refined JSON array of impact metrics."""
             if borough_name
             else "Refined by Nvidia Nemotron using London Datastore data"
         )
-        return nemotron_metrics, note
+        return nemotron_metrics, note, "nemotron", calculation_reason
 
     has_london_sources = any(_normalise_source_url(metric.source) for metric in london_metrics)
     if borough_name and has_london_sources:
@@ -204,4 +235,4 @@ Return the refined JSON array of impact metrics."""
         note = f"Benchmark-method estimates for {borough_name}; mapped rows unavailable"
     else:
         note = "Benchmark-method estimates; mapped borough data unavailable"
-    return _validate_metric_sources(london_metrics, allowed_sources), note
+    return _validate_metric_sources(london_metrics, allowed_sources), note, "deterministic_fallback", calculation_reason
