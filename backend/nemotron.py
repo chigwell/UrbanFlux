@@ -61,7 +61,7 @@ When the user describes a planning goal — such as increasing housing density, 
 
 1. Acknowledge the goal clearly and concisely.
 2. Identify which of the provided impact metrics and borough data rows are most relevant to that goal.
-3. Recommend specific, actionable replanning parameters (road width, speed limit, cycle lanes, green space percentage) that would help achieve it.
+3. Recommend specific, actionable replanning parameters (housing density, green space target, parking pressure, road fill, road alignment, height ambition) that would help achieve it.
 4. Quantify the expected impact where possible, referencing the real data provided.
 5. Flag any trade-offs or constraints (e.g. increasing building density may reduce green space).
 
@@ -249,16 +249,16 @@ EXAMPLE_IMPACT_RESPONSE = {
             "source": "https://tfl.gov.uk/corporate/publications-and-reports/streets-toolkit",
         },
         {
-            "improved_metric": "Road NOₓ emissions",
-            "improved_value": "-12%",
-            "delta": "-12% vs current speed limit",
-            "source": "https://data.london.gov.uk/dataset/london-atmospheric-emissions-inventory--laei--2019",
+            "improved_metric": "Housing capacity",
+            "improved_value": "+27.1%",
+            "delta": "+27.1% vs baseline massing",
+            "source": "https://data.london.gov.uk/dataset/land-area-and-population-density-ward-and-borough-e1zp8/",
         },
         {
-            "improved_metric": "PM2.5 exposure",
-            "improved_value": "16.51 µg/m³",
-            "delta": "-1.44 µg/m³ (from real borough data (17.95 µg/m³))",
-            "source": "https://data.london.gov.uk/dataset/pm2-5-map-and-exposure-data",
+            "improved_metric": "Productive land released from parking",
+            "improved_value": "+7.8%",
+            "delta": "+7.8% vs maximum parking pressure",
+            "source": "https://data.london.gov.uk/dataset/car-parking-and-london-s-available-space",
         },
         {
             "improved_metric": "Summer peak temperature",
