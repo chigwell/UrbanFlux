@@ -1,0 +1,106 @@
+name: Deploy frontend and backend
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-frontend:
+    name: Deploy frontend to Cloudflare Pages
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build static site
+        run: npm run build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: frontend
+          command: pages deploy out --project-name=${{ secrets.CLOUDFLARE_PROJECT_NAME }} --branch=main
+
+  deploy-backend:
+    name: Deploy FastAPI backend to VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.VPS_SSH_PRIVATE_KEY }}" > ~/.ssh/urbanflux_deploy_key
+          chmod 600 ~/.ssh/urbanflux_deploy_key
+          ssh-keygen -y -f ~/.ssh/urbanflux_deploy_key > ~/.ssh/urbanflux_deploy_key.pub
+          ssh-keygen -lf ~/.ssh/urbanflux_deploy_key.pub
+
+      - name: Upload backend source
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_SSH_PORT || '22' }}
+        run: |
+          rsync -az --delete \
+            --exclude ".venv" \
+            --exclude "__pycache__" \
+            --exclude ".pytest_cache" \
+            --exclude ".mypy_cache" \
+            --exclude ".git" \
+            -e "ssh -i ~/.ssh/urbanflux_deploy_key -p ${VPS_PORT} -o StrictHostKeyChecking=no -o BatchMode=yes -o IdentitiesOnly=yes" \
+            backend/ \
+            ${VPS_USER}@${VPS_HOST}:/opt/urbanflux/backend/
+
+      - name: Install dependencies and restart backend service
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_SSH_PORT || '22' }}
+          BACKEND_SERVICE: ${{ secrets.VPS_SERVICE_NAME || 'urbanflux-backend' }}
+        run: |
+          ssh -i ~/.ssh/urbanflux_deploy_key -p "${VPS_PORT}" -o StrictHostKeyChecking=no \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            ${VPS_USER}@${VPS_HOST} "BACKEND_SERVICE=${BACKEND_SERVICE} bash -s" << 'EOF'
+          set -euo pipefail
+          TARGET_DIR="/opt/urbanflux/backend"
+          SERVICE_NAME="${BACKEND_SERVICE}"
+
+          sudo -n apt-get update
+          sudo -n apt-get install -y python3-venv python3-pip rsync
+
+          cd "${TARGET_DIR}"
+          if [ ! -f ".venv/bin/activate" ]; then
+            rm -rf .venv
+            python3 -m venv .venv
+          fi
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          sudo -n systemctl daemon-reload
+          sudo -n systemctl restart "${SERVICE_NAME}"
+          sudo -n systemctl --no-pager status "${SERVICE_NAME}"
+          EOF
