@@ -69,10 +69,11 @@ def _format_latest_theme_row(theme: str, row: dict[str, Any] | None) -> dict[str
             "source_row_preview": "No dated row found",
         }
 
+    source = row.get("source") or {}
     return {
         "theme": theme,
-        "dataset_title": row.get("dataset_title"),
-        "resource_title": row.get("resource_title"),
+        "dataset_title": row.get("dataset_title") or source.get("dataset_title"),
+        "resource_title": row.get("resource_title") or source.get("resource_title"),
         "row_number": row.get("row_number"),
         "date_start": row.get("date_start"),
         "date_end": row.get("date_end"),
