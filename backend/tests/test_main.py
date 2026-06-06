@@ -82,7 +82,7 @@ def test_impact_endpoint_returns_replanning_metrics(monkeypatch) -> None:
     assert payload["area_km2"] > 0
     assert len(payload["metrics"]) == 5
     assert payload["metrics"][0]["improved_metric"] == "Cycling mode share"
-    assert payload["note"] == "Illustrative estimates - model integration in progress"
+    assert payload["note"] == "Benchmark estimates for Westminster"
 
 
 def test_borough_data_test_endpoint_returns_mapped_data(monkeypatch) -> None:
