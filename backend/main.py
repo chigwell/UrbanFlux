@@ -213,21 +213,23 @@ class GeoJSONPolygon(BaseModel):
 
 
 class ReplanningParams(BaseModel):
-    road_width_m: float = Field(10.0, ge=1.0, le=80.0, description="Planned road width in metres.")
-    lanes: int = Field(2, ge=1, le=8, description="Planned number of traffic lanes.")
-    speed_limit_kmh: int = Field(30, ge=5, le=130, description="Proposed road speed limit in km/h.")
-    cycle_lane: bool = Field(False, description="Whether protected cycle lanes are included.")
-    green_space_pct: float = Field(0.0, ge=0.0, le=100.0, description="Target green space percentage.")
+    housing_density: int = Field(64, ge=5, le=100, description="Housing density: homes per built block.")
+    green_space_target: int = Field(35, ge=5, le=80, description="Green space target: share reserved as parks.")
+    parking_pressure: int = Field(18, ge=0, le=80, description="Parking pressure: surface parking demand.")
+    road_fill: int = Field(35, ge=0, le=100, description="Road fill: boundary anchors connected.")
+    road_alignment: int = Field(72, ge=0, le=100, description="Road alignment: how straight corridors run.")
+    height_ambition: int = Field(58, ge=0, le=100, description="Height ambition: massing of tall buildings.")
 
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
-                    "road_width_m": 10.0,
-                    "lanes": 2,
-                    "speed_limit_kmh": 30,
-                    "cycle_lane": True,
-                    "green_space_pct": 35.0,
+                    "housing_density": 64,
+                    "green_space_target": 35,
+                    "parking_pressure": 18,
+                    "road_fill": 35,
+                    "road_alignment": 72,
+                    "height_ambition": 58,
                 }
             ]
         }
@@ -422,26 +424,34 @@ def _compute_impact_metrics(
     London / TfL benchmarks.  Eugene's model will replace this function.
     """
 
+    density = params.housing_density / 100
+    parking_pressure = params.parking_pressure / 100
+    road_fill = params.road_fill / 100
+    road_alignment = params.road_alignment / 100
+    height_ambition = params.height_ambition / 100
+
     # Road-km estimate: assume a rough street grid density of ~12 km per km²
-    # in inner London (TfL Street Types report, 2023).
-    road_km = round(area_km2 * 12, 1)
+    # in inner London (TfL Street Types report, 2023), scaled by road fill.
+    road_km = round(area_km2 * 12 * road_fill, 1)
 
     # --- Walking / cycling accessibility ---
-    # TfL: each km of new protected cycle lane increases cycling mode share
-    # by ~0.3 percentage points in the surrounding LSOA (LCWIP 2023).
-    cycling_boost_pp = round(road_km * 0.3 if params.cycle_lane else 0, 1)
+    # TfL: each km of coherent active-travel corridor increases cycling mode
+    # share by ~0.3 percentage points in the surrounding LSOA (LCWIP 2023).
+    cycling_boost_pp = round(road_km * (0.18 + road_alignment * 0.12), 1)
 
-    # --- Air quality ---
-    # LAEI 2019: road transport contributes ~50 % of NOₓ in inner London.
-    # Lower speed limits reduce NOₓ by ~6 % per 10 km/h reduction from 50 km/h.
-    baseline_speed = 50
-    speed_reduction_steps = max(0, (baseline_speed - params.speed_limit_kmh) // 10)
-    nox_reduction_pct = round(speed_reduction_steps * 6, 1)
+    # --- Housing capacity ---
+    # Illustrative capacity uplift driven by denser blocks and taller massing.
+    homes_capacity_uplift_pct = round((density * 26) + (height_ambition * 18), 1)
 
     # --- Green space ---
     # Each 1 % increase in green space cover in an LSOA correlates with
     # ~0.15 °C reduction in summer peak temperature (UCL Urban Cooling, 2022).
-    temp_reduction = round(params.green_space_pct * 0.15, 2)
+    temp_reduction = round(params.green_space_target * 0.15, 2)
+
+    # --- Parking pressure ---
+    # Surface parking pressure consumes land that could otherwise be used for
+    # homes, green space, or active frontage.
+    productive_land_gain_pct = round(max(0, 0.8 - parking_pressure) * 12.5, 1)
 
     # --- Active travel health ---
     # WHO HEAT tool: each additional km of walking/cycling infrastructure per
@@ -456,10 +466,10 @@ def _compute_impact_metrics(
             source="https://tfl.gov.uk/corporate/publications-and-reports/streets-toolkit",
         ),
         ImpactMetric(
-            improved_metric="Road NOₓ emissions",
-            improved_value=f"-{nox_reduction_pct}%",
-            delta=f"-{nox_reduction_pct}% vs current speed limit",
-            source="https://data.london.gov.uk/dataset/london-atmospheric-emissions-inventory--laei--2019",
+            improved_metric="Housing capacity",
+            improved_value=f"+{homes_capacity_uplift_pct}%",
+            delta=f"+{homes_capacity_uplift_pct}% vs baseline massing",
+            source="https://data.london.gov.uk/dataset/land-area-and-population-density-ward-and-borough-e1zp8/",
         ),
         ImpactMetric(
             improved_metric="Summer peak temperature",
@@ -468,16 +478,16 @@ def _compute_impact_metrics(
             source="https://www.london.gov.uk/programmes-strategies/environment-and-climate-change/climate-change/urban-greening",
         ),
         ImpactMetric(
+            improved_metric="Productive land released from parking",
+            improved_value=f"+{productive_land_gain_pct}%",
+            delta=f"+{productive_land_gain_pct}% vs maximum parking pressure",
+            source="https://data.london.gov.uk/dataset/car-parking-and-london-s-available-space",
+        ),
+        ImpactMetric(
             improved_metric="Premature deaths prevented (active travel)",
             improved_value=f"{lives_saved_per_year} lives/year",
             delta=f"+{lives_saved_per_year} vs baseline",
             source="https://www.euro.who.int/en/health-topics/environment-and-health/Transport-and-health/activities/quantifying-health-impacts-of-transport/heat-tool",
-        ),
-        ImpactMetric(
-            improved_metric="Estimated population affected",
-            improved_value=f"{population:,}",
-            delta="N/A",
-            source="https://www.nomisweb.co.uk/output/census/2021/census2021-ts001.zip",
         ),
     ]
 

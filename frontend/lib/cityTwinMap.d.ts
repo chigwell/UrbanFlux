@@ -14,6 +14,15 @@ export type CityTwinSettingKey =
 
 export type CityTwinSettings = Record<CityTwinSettingKey, number>;
 
+export interface ReplanningParams {
+  housing_density: number;
+  green_space_target: number;
+  parking_pressure: number;
+  road_fill: number;
+  road_alignment: number;
+  height_ambition: number;
+}
+
 /** Raw, unformatted metrics computed for the current scenario. */
 export interface CityTwinRawMetrics {
   areaHa: number;
@@ -91,5 +100,7 @@ export interface CityTwinHandle {
   fit: () => void;
   destroy: () => void;
 }
+
+export function cityTwinSettingsToReplanningParams(settings: CityTwinSettings): ReplanningParams;
 
 export function initCityTwinMap(options: CityTwinOptions): CityTwinHandle;

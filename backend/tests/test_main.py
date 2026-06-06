@@ -66,11 +66,12 @@ def test_impact_endpoint_returns_replanning_metrics(monkeypatch) -> None:
         json={
             "polygon": SAMPLE_POLYGON,
             "params": {
-                "road_width_m": 10,
-                "lanes": 2,
-                "speed_limit_kmh": 30,
-                "cycle_lane": True,
-                "green_space_pct": 20,
+                "housing_density": 64,
+                "green_space_target": 20,
+                "parking_pressure": 18,
+                "road_fill": 35,
+                "road_alignment": 72,
+                "height_ambition": 58,
             },
         },
     )
