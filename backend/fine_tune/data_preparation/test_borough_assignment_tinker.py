@@ -15,6 +15,12 @@ DEFAULT_MODEL_PATH = (
 )
 DEFAULT_DATASET_PATH = Path(__file__).resolve().with_name("urbanflux_borough_assignment_training.jsonl")
 DEFAULT_RENDERER = "nemotron3_disable_thinking"
+KNOWN_CHAT_ARTIFACTS = (
+    "<|im_end|>",
+    "<|endoftext|>",
+    "<|end_of_text|>",
+    "</s>",
+)
 
 
 def load_jsonl_record(path: Path, index: int) -> dict[str, Any]:
@@ -92,6 +98,28 @@ def extract_generated_text(sample_result: Any, tokenizer: Any) -> str:
     return str(sample_result)
 
 
+def clean_generated_text(text: str, tokenizer: Any | None = None) -> str:
+    cleaned = text
+    special_tokens = list(KNOWN_CHAT_ARTIFACTS)
+    if tokenizer is not None:
+        for attribute in ("eos_token", "sep_token", "pad_token"):
+            value = getattr(tokenizer, attribute, None)
+            if isinstance(value, str) and value:
+                special_tokens.append(value)
+        special_map = getattr(tokenizer, "special_tokens_map", None)
+        if isinstance(special_map, dict):
+            for value in special_map.values():
+                if isinstance(value, str):
+                    special_tokens.append(value)
+                elif isinstance(value, list):
+                    special_tokens.extend(item for item in value if isinstance(item, str))
+
+    for token in dict.fromkeys(special_tokens):
+        if token and token in cleaned:
+            cleaned = cleaned.split(token, 1)[0]
+    return cleaned.strip()
+
+
 def load_tinker_dependencies():
     try:
         import tinker
@@ -155,7 +183,7 @@ async def run(args: argparse.Namespace) -> int:
         num_samples=1,
         sampling_params=params,
     ).result()
-    generated = extract_generated_text(result, tokenizer).strip()
+    generated = clean_generated_text(extract_generated_text(result, tokenizer), tokenizer)
 
     print(
         json.dumps(

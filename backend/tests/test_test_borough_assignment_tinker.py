@@ -52,6 +52,11 @@ def test_parse_args_defaults_to_provided_model_path() -> None:
     assert args.max_tokens == 12
 
 
+def test_clean_generated_text_removes_chat_artifacts() -> None:
+    assert tester.clean_generated_text("Barking and Dagenham<|im_end|>") == "Barking and Dagenham"
+    assert tester.clean_generated_text("Westminster</s> extra") == "Westminster"
+
+
 def test_dry_run_outputs_prompt_without_tinker_import(monkeypatch, tmp_path: Path, capsys) -> None:
     dataset = tmp_path / "borough.jsonl"
     write_dataset(dataset)
