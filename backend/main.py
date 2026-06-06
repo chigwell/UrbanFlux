@@ -13,6 +13,11 @@ from pydantic import BaseModel, Field
 from shapely.geometry import shape
 from shapely.ops import unary_union
 
+try:
+    from borough_data import build_borough_data_test_response
+except ImportError:
+    from backend.borough_data import build_borough_data_test_response
+
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
@@ -476,55 +481,6 @@ def _compute_impact_metrics(
     return metrics
 
 
-def _get_data_source_functions():
-    try:
-        from data_sources import get_borough_summary, iter_borough_data, resolve_borough
-    except ImportError:
-        from backend.data_sources import get_borough_summary, iter_borough_data, resolve_borough
-    return get_borough_summary, iter_borough_data, resolve_borough
-
-
-def _preview_source_row(source_row: object) -> str:
-    if isinstance(source_row, dict):
-        return "; ".join(f"{key}: {value}" for key, value in list(source_row.items())[:6])
-    return str(source_row or "")
-
-
-def _latest_row_for_theme(iter_borough_data, lat: float, lon: float, theme: str) -> dict[str, Any]:
-    latest_row: dict[str, Any] | None = None
-    latest_key = ("", "", -1)
-    for row in iter_borough_data(lat, lon, theme=theme, batch_size=1000):
-        date_end = row.get("date_end") or ""
-        date_start = row.get("date_start") or ""
-        row_number = row.get("row_number") or 0
-        candidate_key = (date_end or date_start, date_start, row_number)
-        if candidate_key > latest_key:
-            latest_key = candidate_key
-            latest_row = row
-
-    if latest_row is None:
-        return {
-            "theme": theme,
-            "dataset_title": None,
-            "resource_title": None,
-            "row_number": None,
-            "date_start": None,
-            "date_end": None,
-            "source_row_preview": "No dated row found",
-        }
-
-    source = latest_row.get("source") or {}
-    return {
-        "theme": theme,
-        "dataset_title": source.get("dataset_title"),
-        "resource_title": source.get("resource_title"),
-        "row_number": latest_row.get("row_number"),
-        "date_start": latest_row.get("date_start"),
-        "date_end": latest_row.get("date_end"),
-        "source_row_preview": _preview_source_row(latest_row.get("source_row")),
-    }
-
-
 # ---------------------------------------------------------------------------
 # Existing endpoints
 # ---------------------------------------------------------------------------
@@ -653,30 +609,13 @@ def get_borough_data_test(
     theme: str | None = Query(None, description="Optional single theme for latest-row lookup."),
 ) -> BoroughDataTestResponse:
     try:
-        get_borough_summary, iter_borough_data, resolve_borough = _get_data_source_functions()
-        borough = resolve_borough(lat, lon)
-        if borough is None:
-            return BoroughDataTestResponse(
-                coordinates={"lat": lat, "lon": lon},
-                borough=None,
-                summary_by_theme=[],
-                top_datasets=[],
-                latest_rows_by_theme=[],
-            )
-
-        summary = get_borough_summary(lat, lon, top_datasets_limit=top_datasets_limit)
-        themes = [theme] if theme else [item["theme"] for item in summary["themes"]]
-        latest_rows = [
-            _latest_row_for_theme(iter_borough_data, lat, lon, theme_name)
-            for theme_name in themes
-        ]
+        payload = build_borough_data_test_response(
+            lat=lat,
+            lon=lon,
+            top_datasets_limit=top_datasets_limit,
+            theme=theme,
+        )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    return BoroughDataTestResponse(
-        coordinates={"lat": lat, "lon": lon},
-        borough=borough,
-        summary_by_theme=summary["themes"],
-        top_datasets=summary["top_datasets"],
-        latest_rows_by_theme=latest_rows,
-    )
+    return BoroughDataTestResponse(**payload)
