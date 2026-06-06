@@ -157,6 +157,7 @@ export function CityTwinApp() {
           metrics={metrics}
           impact={impact}
           report={report}
+          layoutId="analytics-desktop"
         />
       </div>
 
@@ -183,6 +184,7 @@ export function CityTwinApp() {
             metrics={metrics}
             impact={impact}
             report={report}
+            layoutId="analytics-mobile"
           />
           <StatusCard progress={progress} status={status} pills={pills} />
           <LegendCard />
