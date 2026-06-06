@@ -60,6 +60,7 @@ const WATER_CONTEXT_READY_STATES = new Set(["vector", "osm", "partial"]);
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "https://api.urbanflux.london";
 const POPULATION_FETCH_DEBOUNCE_MS = 600;
+const IMPACT_FETCH_DEBOUNCE_MS = 600;
 
 export function cityTwinSettingsToReplanningParams(settings) {
   return {
@@ -85,6 +86,7 @@ const emit = {
   onHint: options.onHint || noop,
   onPills: options.onPills || noop,
   onPopulation: options.onPopulation || noop,
+  onImpact: options.onImpact || noop,
   onToast: options.onToast || noop,
 };
 
@@ -114,6 +116,9 @@ const state = {
   populationTimer: null,
   populationController: null,
   populationKey: "",
+  impactTimer: null,
+  impactController: null,
+  impactKey: "",
   statsCache: null,
   contextCache: new Map(),
   overpassCooldownUntil: 0,
@@ -190,6 +195,7 @@ function setSetting(key, value) {
   }
   state.settings[key] = Number(value);
   scheduleGeneration();
+  scheduleImpactFetch();
 }
 
 function setTheme(theme) {
@@ -544,6 +550,7 @@ function addVertex(coord) {
   scheduleGeneration();
   scheduleContextFetch();
   schedulePopulationFetch();
+  scheduleImpactFetch();
 }
 
 function undoVertex() {
@@ -556,6 +563,7 @@ function undoVertex() {
   scheduleGeneration();
   scheduleContextFetch();
   schedulePopulationFetch();
+  scheduleImpactFetch();
 }
 
 function clearZone() {
@@ -570,6 +578,7 @@ function clearZone() {
   setSourceData("generated", EMPTY);
   updateMetrics(null);
   clearPopulation();
+  clearImpact();
   setStatus(20, "Zone cleared. Click four or more points to start a new scenario.");
 }
 
@@ -586,6 +595,7 @@ function loadDemoZone(showMessage = false) {
   fitToZone({ animated: showMessage });
   queueInitialContextFetch();
   schedulePopulationFetch();
+  scheduleImpactFetch();
   if (showMessage) {
     showToast("Demo zone restored. Water override is off by default, so mapped rivers are excluded from generation.");
   }
@@ -647,6 +657,7 @@ function renderVertexMarkers() {
       scheduleGeneration();
       scheduleContextFetch();
       schedulePopulationFetch();
+      scheduleImpactFetch();
     });
 
     element.addEventListener("dblclick", (event) => {
@@ -691,6 +702,7 @@ function renderMidpointMarkersOnly() {
       scheduleGeneration();
       scheduleContextFetch();
       schedulePopulationFetch();
+      scheduleImpactFetch();
     });
     const marker = new maplibregl.Marker({ element, anchor: "center" }).setLngLat(coord).addTo(map);
     state.midpointMarkers.push(marker);
@@ -708,6 +720,7 @@ function removeVertex(index) {
   scheduleGeneration();
   scheduleContextFetch();
   schedulePopulationFetch();
+  scheduleImpactFetch();
 }
 
 function midpointLngLat(a, b) {
@@ -800,6 +813,74 @@ async function fetchPopulation() {
   } finally {
     if (state.populationController === controller) {
       state.populationController = null;
+    }
+  }
+}
+
+function scheduleImpactFetch() {
+  if (state.vertices.length < MIN_POLYGON_VERTICES) {
+    return;
+  }
+  window.clearTimeout(state.impactTimer);
+  state.impactTimer = window.setTimeout(fetchImpact, IMPACT_FETCH_DEBOUNCE_MS);
+}
+
+function clearImpact() {
+  window.clearTimeout(state.impactTimer);
+  state.impactController?.abort();
+  state.impactController = null;
+  state.impactKey = "";
+  emit.onImpact(null);
+}
+
+async function fetchImpact() {
+  if (state.vertices.length < MIN_POLYGON_VERTICES) {
+    return;
+  }
+  // Impact depends on both the polygon and the slider params, so key on both.
+  const params = cityTwinSettingsToReplanningParams(state.settings);
+  const key = `${verticesKey(state.vertices)}|${JSON.stringify(params)}`;
+  if (key === state.impactKey) {
+    return;
+  }
+
+  state.impactController?.abort();
+  const controller = new AbortController();
+  state.impactController = controller;
+  emit.onImpact({ status: "loading" });
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/impact`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ polygon: polygonFeature(state.vertices).geometry, params }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Impact request failed: ${response.status}`);
+    }
+    const data = await response.json();
+    state.impactKey = key;
+    emit.onImpact({
+      status: "ready",
+      note: data.note,
+      metrics: (data.metrics || []).map((metric) => ({
+        metric: metric.improved_metric,
+        value: metric.improved_value,
+        delta: metric.delta,
+        source: metric.source,
+      })),
+    });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      return;
+    }
+    // Surface the failure (the card shows an error) and allow a later retry.
+    state.impactKey = "";
+    emit.onImpact({ status: "error" });
+  } finally {
+    if (state.impactController === controller) {
+      state.impactController = null;
     }
   }
 }
@@ -3401,8 +3482,10 @@ function destroy() {
   window.clearTimeout(state.contextTimer);
   window.clearTimeout(state.toastTimer);
   window.clearTimeout(state.populationTimer);
+  window.clearTimeout(state.impactTimer);
   state.contextFetchController?.abort();
   state.populationController?.abort();
+  state.impactController?.abort();
   for (const marker of state.vertexMarkers) {
     marker.remove();
   }
