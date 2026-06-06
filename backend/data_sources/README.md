@@ -22,6 +22,8 @@ The first run downloads about `336MB` and unpacks about `3.1GB`.
 
 ## Use In Python
 
+Use the UrbanFlux wrapper import. This is the recommended path because it auto-downloads and unpacks the data package on first use:
+
 ```python
 from backend.data_sources import get_borough_data, get_borough_summary, resolve_borough
 
@@ -40,6 +42,25 @@ from backend.data_sources import iter_borough_data
 
 for row in iter_borough_data(51.5074, -0.1278, theme="planning_land"):
     print(row)
+```
+
+Do not import `london_mapped_data` directly before bootstrap:
+
+```python
+# Not recommended before setup has run
+from london_mapped_data import get_borough_data
+```
+
+The internal package expects this file to exist:
+
+```text
+london_mapped_data_package/data/london_mapped_compact.sqlite3
+```
+
+That file appears only after `backend.data_sources` auto-downloads/unpacks the R2 bundle, or after running:
+
+```bash
+python3 backend/data_sources/setup_london_mapped_data.py
 ```
 
 ## Available Themes
