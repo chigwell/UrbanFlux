@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "london-mapped-data"
+version = "0.1.0"
+description = "Standalone London borough mapped data lookup package."
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools]
+packages = ["london_mapped_data"]
