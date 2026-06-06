@@ -143,8 +143,8 @@ jobs:
           TARGET_DIR="/opt/urbanflux/backend"
           SERVICE_NAME="${BACKEND_SERVICE}"
 
-          sudo -n apt-get update
-          sudo -n apt-get install -y python3-venv python3-pip rsync
+          command -v python3 >/dev/null
+          command -v rsync >/dev/null
 
           cd "${TARGET_DIR}"
           if [ ! -s ".env" ] || ! grep -q '^FAL_KEY=.' ".env"; then
@@ -164,12 +164,8 @@ jobs:
             python data_sources/setup_london_mapped_data.py
           fi
 
-          sudo -n mkdir -p "/etc/systemd/system/${SERVICE_NAME}.service.d"
-          printf '[Service]\nEnvironmentFile=/opt/urbanflux/backend/.env\n' \
-            | sudo -n tee "/etc/systemd/system/${SERVICE_NAME}.service.d/10-env.conf" > /dev/null
-          sudo -n chmod 600 "/opt/urbanflux/backend/.env"
+          chmod 600 ".env"
 
-          sudo -n systemctl daemon-reload
           sudo -n systemctl restart "${SERVICE_NAME}"
           sudo -n systemctl --no-pager status "${SERVICE_NAME}"
           EOF
