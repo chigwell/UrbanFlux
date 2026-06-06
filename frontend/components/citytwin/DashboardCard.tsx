@@ -121,14 +121,16 @@ function ImpactMetrics({ impact }: { impact: CityTwinImpact | null }) {
                     <span className="text-xs text-muted-foreground">
                       {metric.delta}
                     </span>
-                    <a
-                      href={metric.source}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-xs underline underline-offset-2 hover:text-foreground"
-                    >
-                      Source
-                    </a>
+                    {metric.source ? (
+                      <a
+                        href={metric.source}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs underline underline-offset-2 hover:text-foreground"
+                      >
+                        Source
+                      </a>
+                    ) : null}
                   </div>
                 </div>
               );

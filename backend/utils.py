@@ -62,7 +62,10 @@ def _format_latest_theme_row(theme: str, row: dict[str, Any] | None) -> dict[str
         return {
             "theme": theme,
             "dataset_title": None,
+            "dataset_url": None,
             "resource_title": None,
+            "csv_url": None,
+            "source_url": None,
             "row_number": None,
             "date_start": None,
             "date_end": None,
@@ -70,10 +73,15 @@ def _format_latest_theme_row(theme: str, row: dict[str, Any] | None) -> dict[str
         }
 
     source = row.get("source") or {}
+    dataset_url = row.get("dataset_url") or source.get("dataset_url")
+    csv_url = row.get("csv_url") or source.get("csv_url")
     return {
         "theme": theme,
         "dataset_title": row.get("dataset_title") or source.get("dataset_title"),
+        "dataset_url": dataset_url,
         "resource_title": row.get("resource_title") or source.get("resource_title"),
+        "csv_url": csv_url,
+        "source_url": dataset_url or csv_url,
         "row_number": row.get("row_number"),
         "date_start": row.get("date_start"),
         "date_end": row.get("date_end"),

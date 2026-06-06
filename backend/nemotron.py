@@ -97,8 +97,14 @@ def _format_latest_rows(latest_rows: list[dict]) -> str:
         date_start = row.get("date_start") or ""
         date_end = row.get("date_end") or ""
         date_str = f"{date_start} – {date_end}".strip(" –")
+        source_url = row.get("source_url") or row.get("dataset_url") or row.get("csv_url") or ""
+        dataset_title = row.get("dataset_title") or "Unknown dataset"
+        resource_title = row.get("resource_title") or "Unknown resource"
         if preview:
-            lines.append(f"  [{theme}] {date_str}: {preview}")
+            lines.append(
+                f"  [{theme}] {date_str}: {preview} "
+                f"(dataset: {dataset_title}; resource: {resource_title}; source: {source_url})"
+            )
     return "\n".join(lines) if lines else "  (none available)"
 
 
