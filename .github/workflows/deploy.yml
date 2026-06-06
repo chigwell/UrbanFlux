@@ -101,11 +101,29 @@ jobs:
             --exclude ".pytest_cache" \
             --exclude ".mypy_cache" \
             --exclude ".git" \
+            --exclude ".env" \
             --exclude "data_sources/.cache" \
             --exclude "data_sources/london_mapped_data_package" \
             -e "ssh -i ~/.ssh/urbanflux_deploy_key -p ${VPS_PORT} -o StrictHostKeyChecking=no -o BatchMode=yes -o IdentitiesOnly=yes" \
             backend/ \
             ${VPS_USER}@${VPS_HOST}:/opt/urbanflux/backend/
+
+      - name: Upload backend environment
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_SSH_PORT || '22' }}
+          FAL_KEY: ${{ secrets.FAL_KEY }}
+        run: |
+          umask 077
+          cat > /tmp/urbanflux-backend.env << EOF
+          FAL_KEY=${FAL_KEY}
+          EOF
+
+          scp -i ~/.ssh/urbanflux_deploy_key -P "${VPS_PORT}" \
+            -o StrictHostKeyChecking=no -o BatchMode=yes -o IdentitiesOnly=yes \
+            /tmp/urbanflux-backend.env \
+            ${VPS_USER}@${VPS_HOST}:/opt/urbanflux/backend/.env
 
       - name: Install dependencies and restart backend service
         env:
