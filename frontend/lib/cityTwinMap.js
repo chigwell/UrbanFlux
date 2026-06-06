@@ -45,30 +45,33 @@ const MAX_WATER_OBSTACLES = 720;
 const WATER_CONTEXT_READY_STATES = new Set(["vector", "osm", "partial"]);
 
 
-export function initCityTwinMap() {
-const dom = {
-  progressBar: document.getElementById("progressBar"),
-  statusText: document.getElementById("statusText"),
-  roadsPill: document.getElementById("roadsPill"),
-  waterPill: document.getElementById("waterPill"),
-  anchorsPill: document.getElementById("anchorsPill"),
-  scenarioLabel: document.getElementById("scenarioLabel"),
-  areaMetric: document.getElementById("areaMetric"),
-  homesMetric: document.getElementById("homesMetric"),
-  linksMetric: document.getElementById("linksMetric"),
-  waterMetric: document.getElementById("waterMetric"),
-  buildingsMetric: document.getElementById("buildingsMetric"),
-  parkingMetric: document.getElementById("parkingMetric"),
-  reportText: document.getElementById("reportText"),
-  mapHint: document.getElementById("mapHint"),
-  toast: document.getElementById("toast"),
-  themeToggle: document.getElementById("themeToggle"),
-  allowWaterToggle: document.getElementById("allowWaterToggle"),
+export function initCityTwinMap(options = {}) {
+// View bridge: the engine no longer reaches into the DOM by id. React passes
+// callbacks for every output and drives every input through the returned handle.
+const noop = () => {};
+const emit = {
+  onStatus: options.onStatus || noop,
+  onMetrics: options.onMetrics || noop,
+  onScenario: options.onScenario || noop,
+  onReport: options.onReport || noop,
+  onHint: options.onHint || noop,
+  onPills: options.onPills || noop,
+  onToast: options.onToast || noop,
+};
+
+const initialTheme = options.initialTheme === "light" ? "light" : "dark";
+const defaultSettings = {
+  density: 64,
+  green: 35,
+  parking: 18,
+  street: 35,
+  alignment: 72,
+  height: 58,
 };
 
 const state = {
-  theme: "dark",
-  allowWater: false,
+  theme: initialTheme,
+  allowWater: Boolean(options.initialAllowWater),
   vertices: [],
   vertexMarkers: [],
   midpointMarkers: [],
@@ -82,20 +85,13 @@ const state = {
   toastTimer: null,
   mapReady: false,
   layersReady: false,
-  settings: {
-    density: 64,
-    green: 35,
-    parking: 18,
-    street: 35,
-    alignment: 72,
-    height: 58,
-  },
+  settings: { ...defaultSettings, ...(options.initialSettings || {}) },
   latestStats: createEmptyContextStats(),
 };
 
 const map = new maplibregl.Map({
-  container: "map",
-  style: MAP_STYLES.dark,
+  container: options.container || "map",
+  style: MAP_STYLES[initialTheme],
   center: LONDON_CENTER,
   zoom: 12.4,
   pitch: 57,
@@ -119,7 +115,6 @@ map.on("style.load", () => {
 
 map.once("load", () => {
   state.mapReady = true;
-  wireUi();
   loadDemoZone();
   showToast("Demo zone loaded. Road fill controls how many boundary anchors are connected; road alignment controls how straight the corridors are.");
 });
@@ -131,36 +126,27 @@ map.on("click", (event) => {
   addVertex([event.lngLat.lng, event.lngLat.lat]);
 });
 
-function wireUi() {
-  document.getElementById("demoButton").addEventListener("click", () => loadDemoZone(true));
-  document.getElementById("clearButton").addEventListener("click", clearZone);
-  document.getElementById("undoButton").addEventListener("click", undoVertex);
-  document.getElementById("fitButton").addEventListener("click", fitToZone);
-
-  dom.themeToggle.addEventListener("change", (event) => {
-    setTheme(event.target.checked ? "light" : "dark");
-  });
-
-  dom.allowWaterToggle.addEventListener("change", (event) => {
-    state.allowWater = event.target.checked;
-    setStatus(
-      state.allowWater ? 70 : 78,
-      state.allowWater
-        ? "Water override enabled. Roads and buildings may cross mapped rivers and basins."
-        : "Water override disabled. Rivers and basins are hard masks for generated roads and buildings.",
-    );
-    scheduleGeneration();
-  });
-
-  for (const key of ["density", "green", "parking", "street", "alignment", "height"]) {
-    const input = document.getElementById(key);
-    const output = document.getElementById(`${key}Out`);
-    input.addEventListener("input", () => {
-      state.settings[key] = Number(input.value);
-      output.value = input.value;
-      scheduleGeneration();
-    });
+function setAllowWater(on) {
+  const next = Boolean(on);
+  if (state.allowWater === next) {
+    return;
   }
+  state.allowWater = next;
+  setStatus(
+    state.allowWater ? 70 : 78,
+    state.allowWater
+      ? "Water override enabled. Roads and buildings may cross mapped rivers and basins."
+      : "Water override disabled. Rivers and basins are hard masks for generated roads and buildings.",
+  );
+  scheduleGeneration();
+}
+
+function setSetting(key, value) {
+  if (!(key in state.settings)) {
+    return;
+  }
+  state.settings[key] = Number(value);
+  scheduleGeneration();
 }
 
 function setTheme(theme) {
@@ -168,7 +154,6 @@ function setTheme(theme) {
     return;
   }
   state.theme = theme;
-  document.body.dataset.theme = theme;
   map.setStyle(MAP_STYLES[theme], { diff: false });
   setStatus(74, `${theme === "light" ? "Light" : "Dark"} theme loaded. Restoring generated layers...`);
 }
@@ -1269,8 +1254,8 @@ function generateScenario() {
     setSourceData("generated", EMPTY);
     updateMetrics(null);
     updatePills(stats);
-    dom.reportText.textContent = "Waiting for vector-tile or raw OSM water masks before generating. Water override is off, so the fallback layout is blocked instead of guessing across rivers.";
-    dom.mapHint.textContent = "Water protection is on. Waiting for river and waterbody masks before drawing generated roads/buildings.";
+    emit.onReport("Waiting for vector-tile or raw OSM water masks before generating. Water override is off, so the fallback layout is blocked instead of guessing across rivers.");
+    emit.onHint("Water protection is on. Waiting for river and waterbody masks before drawing generated roads/buildings.");
     setStatus(46, "Water protection is enabled. Waiting for river and waterbody masks before generating the plan...");
     return;
   }
@@ -1427,6 +1412,13 @@ function closeLocalRing(points) {
     return points;
   }
   return sameLocalPoint(points[0], points[points.length - 1]) ? points : [...points, points[0]];
+}
+
+function closeRing(ring) {
+  if (!ring.length) {
+    return ring;
+  }
+  return sameCoord(ring[0], ring[ring.length - 1]) ? ring : [...ring, ring[0]];
 }
 
 function collectPolygonRings(feature) {
@@ -2340,30 +2332,30 @@ function estimateWaterAreaInside(obstacles, selectedPolygon, frame) {
 
 function updateMetrics(metrics) {
   if (!metrics) {
-    dom.scenarioLabel.textContent = "No scenario yet";
-    dom.areaMetric.textContent = "—";
-    dom.homesMetric.textContent = "—";
-    dom.linksMetric.textContent = "—";
-    dom.waterMetric.textContent = "—";
-    dom.buildingsMetric.textContent = "—";
-    dom.parkingMetric.textContent = "—";
-    dom.reportText.textContent = "Waiting for a valid polygon. Click four or more points, or use the demo zone.";
-    dom.mapHint.textContent = "Click at least four points. Drag cyan vertices. White handles add new points.";
+    emit.onScenario("No scenario yet");
+    emit.onMetrics(null);
+    emit.onReport("Waiting for a valid polygon. Click four or more points, or use the demo zone.");
+    emit.onHint("Click at least four points. Drag vertices to reshape. Plus handles add new points.");
     updatePills(createEmptyContextStats());
     return;
   }
-  dom.scenarioLabel.textContent = state.allowWater ? "Water override scenario" : "Water-protected scenario";
-  dom.areaMetric.textContent = formatMetric(metrics.areaHa, 1);
-  dom.homesMetric.textContent = metrics.homes.toLocaleString();
-  dom.linksMetric.textContent = metrics.roadLinks.toLocaleString();
-  dom.waterMetric.textContent = metrics.waterInsideHa > 0.05 ? `${formatMetric(metrics.waterInsideHa, 1)} ha` : "0 ha";
-  dom.buildingsMetric.textContent = metrics.generatedBuildings.toLocaleString();
-  dom.parkingMetric.textContent = metrics.parkingSpaces.toLocaleString();
-  dom.mapHint.textContent = metrics.roadFill === 0
-    ? "Road fill is 0: no generated roads. Increase Road fill to connect boundary anchors."
-    : metrics.roadLinks > 0
-      ? "Cyan connectors start on highlighted existing basemap/OSM roads; each selected anchor is used once."
-      : "Move an edge closer to existing streets to create exact OSM road snaps.";
+  emit.onScenario(state.allowWater ? "Water override scenario" : "Water-protected scenario");
+  emit.onMetrics({
+    raw: metrics,
+    area: formatMetric(metrics.areaHa, 1),
+    homes: metrics.homes.toLocaleString(),
+    links: metrics.roadLinks.toLocaleString(),
+    water: metrics.waterInsideHa > 0.05 ? `${formatMetric(metrics.waterInsideHa, 1)} ha` : "0 ha",
+    buildings: metrics.generatedBuildings.toLocaleString(),
+    parking: metrics.parkingSpaces.toLocaleString(),
+  });
+  emit.onHint(
+    metrics.roadFill === 0
+      ? "Road fill is 0: no generated roads. Increase Road fill to connect boundary anchors."
+      : metrics.roadLinks > 0
+        ? "Connectors start on highlighted existing basemap/OSM roads; each selected anchor is used once."
+        : "Move an edge closer to existing streets to create exact OSM road snaps.",
+  );
   const waterSentence = metrics.waterProtected
     ? ` Water bodies inside the polygon are hard masks; ${metrics.waterConflictsRemoved} generated feature${metrics.waterConflictsRemoved === 1 ? "" : "s"} touching water were dropped before rendering.`
     : state.allowWater
@@ -2372,27 +2364,23 @@ function updateMetrics(metrics) {
   const roadSentence = metrics.roadFill === 0
     ? "Road fill is 0%, so generated roads are intentionally disabled."
     : `Road fill is ${metrics.roadFill}% and road alignment is ${metrics.roadAlignment}%, so the generator connects ${metrics.roadLinks} selected boundary anchors once instead of filling the whole polygon with a grid.`;
-  dom.reportText.textContent = `The plan generated ${metrics.generatedBuildings} building footprints and ${metrics.parkingSpaces.toLocaleString()} parking spaces. ${roadSentence} It used ${metrics.contextRoads} nearby road geometries and ${metrics.contextWater} water features as context.${waterSentence}`;
+  emit.onReport(`The plan generated ${metrics.generatedBuildings} building footprints and ${metrics.parkingSpaces.toLocaleString()} parking spaces. ${roadSentence} It used ${metrics.contextRoads} nearby road geometries and ${metrics.contextWater} water features as context.${waterSentence}`);
 }
 
 function updatePills(stats) {
-  dom.roadsPill.textContent = stats.roads.length.toLocaleString();
-  dom.waterPill.textContent = stats.water.length.toLocaleString();
-  dom.anchorsPill.textContent = stats.anchors.length.toLocaleString();
+  emit.onPills({
+    roads: stats.roads.length,
+    water: stats.water.length,
+    anchors: stats.anchors.length,
+  });
 }
 
 function setStatus(progress, text) {
-  dom.progressBar.style.width = `${clamp(progress, 8, 100)}%`;
-  dom.statusText.textContent = text;
+  emit.onStatus(clamp(progress, 8, 100), text);
 }
 
 function showToast(text) {
-  dom.toast.textContent = text;
-  dom.toast.classList.add("visible");
-  window.clearTimeout(state.toastTimer);
-  state.toastTimer = window.setTimeout(() => {
-    dom.toast.classList.remove("visible");
-  }, 3600);
+  emit.onToast(text);
 }
 
 function localLineFeature(points, frame, properties) {
@@ -2843,7 +2831,7 @@ function formatMetric(value, digits = 0) {
   });
 }
 
-return () => {
+function destroy() {
   window.clearTimeout(state.generationTimer);
   window.clearTimeout(state.contextTimer);
   window.clearTimeout(state.toastTimer);
@@ -2855,5 +2843,16 @@ return () => {
     marker.remove();
   }
   map.remove();
+}
+
+return {
+  setSetting,
+  setTheme,
+  setAllowWater,
+  loadDemo: () => loadDemoZone(true),
+  clearZone,
+  undo: undoVertex,
+  fit: fitToZone,
+  destroy,
 };
 }
