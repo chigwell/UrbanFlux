@@ -10,12 +10,13 @@ from .setup_london_mapped_data import PUBLIC_BUNDLE_URL, setup as setup_london_m
 
 DATA_SOURCES_DIR = Path(__file__).resolve().parent
 LONDON_MAPPED_DATA_PACKAGE_DIR = DATA_SOURCES_DIR / "london_mapped_data_package"
+LONDON_MAPPED_DATA_DB_PATH = LONDON_MAPPED_DATA_PACKAGE_DIR / "data" / "london_mapped_compact.sqlite3"
 
 
 def ensure_london_mapped_data() -> Path:
     """Return the local package path, downloading/unpacking it on first use."""
-    if not LONDON_MAPPED_DATA_PACKAGE_DIR.exists():
-        setup_london_mapped_data()
+    if not LONDON_MAPPED_DATA_PACKAGE_DIR.exists() or not LONDON_MAPPED_DATA_DB_PATH.exists():
+        setup_london_mapped_data(force=LONDON_MAPPED_DATA_PACKAGE_DIR.exists())
     package_path = str(LONDON_MAPPED_DATA_PACKAGE_DIR)
     if package_path not in sys.path:
         sys.path.insert(0, package_path)
@@ -47,6 +48,7 @@ def get_borough_summary(*args: Any, **kwargs: Any) -> Any:
 __all__ = [
     "DATA_SOURCES_DIR",
     "LONDON_MAPPED_DATA_PACKAGE_DIR",
+    "LONDON_MAPPED_DATA_DB_PATH",
     "PUBLIC_BUNDLE_URL",
     "ensure_london_mapped_data",
     "get_london_mapped_data_api",

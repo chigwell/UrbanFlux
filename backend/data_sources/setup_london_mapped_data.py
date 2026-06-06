@@ -13,6 +13,7 @@ PUBLIC_BUNDLE_URL = "https://pub-f20eb55e72ee41a5b80036ea8f6107bb.r2.dev/london_
 EXPECTED_SIZE_BYTES = 352_253_465
 EXPECTED_ETAG = '"6667302866ff3cd39a8a9afc363dcee3-21"'
 PACKAGE_DIR_NAME = "london_mapped_data_package"
+PACKAGE_DB_RELATIVE_PATH = Path("data") / "london_mapped_compact.sqlite3"
 
 
 def download(url: str, target: Path) -> None:
@@ -44,8 +45,9 @@ def download(url: str, target: Path) -> None:
 
 def extract(zip_path: Path, destination: Path, force: bool) -> Path:
     package_dir = destination / PACKAGE_DIR_NAME
+    package_db = package_dir / PACKAGE_DB_RELATIVE_PATH
     if package_dir.exists():
-        if not force:
+        if not force and package_db.exists():
             print(f"Package already exists: {package_dir}")
             return package_dir
         shutil.rmtree(package_dir)
@@ -55,6 +57,8 @@ def extract(zip_path: Path, destination: Path, force: bool) -> Path:
 
     if not package_dir.exists():
         raise RuntimeError(f"Zip did not contain {PACKAGE_DIR_NAME}/")
+    if not package_db.exists():
+        raise RuntimeError(f"Zip did not contain {PACKAGE_DIR_NAME}/{PACKAGE_DB_RELATIVE_PATH}")
     return package_dir
 
 

@@ -20,6 +20,8 @@ python3 backend/data_sources/test.py
 
 The first run downloads about `336MB` and unpacks about `3.1GB`.
 
+If `london_mapped_data_package/` exists but the SQLite DB is missing, the wrapper will re-download and unpack the package automatically.
+
 ## Use In Python
 
 Use the UrbanFlux wrapper import. This is the recommended path because it auto-downloads and unpacks the data package on first use:
