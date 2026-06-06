@@ -1,4 +1,8 @@
-from backend.data_sources import get_borough_summary, iter_borough_data, resolve_borough
+import json
+import sqlite3
+from datetime import date
+
+from backend.data_sources import LONDON_MAPPED_DATA_DB_PATH, ensure_london_mapped_data, get_borough_summary, resolve_borough
 
 
 def md(value: object) -> str:
@@ -12,9 +16,46 @@ def preview_source_row(source_row: object) -> str:
     return str(source_row)
 
 
+def latest_row_for_theme(borough_name: str, theme: str) -> dict | None:
+    today = date.today().isoformat()
+    with sqlite3.connect(LONDON_MAPPED_DATA_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT
+              r.row_number,
+              r.date_start,
+              r.date_end,
+              r.source_row_json,
+              ds.title AS dataset_title,
+              cf.title AS resource_title
+            FROM csv_row_transformations r
+            JOIN dataset_csv_files cf ON cf.id = r.csv_file_id
+            JOIN dataset_sources ds ON ds.id = cf.dataset_source_id
+            WHERE r.borough_name = :borough_name
+              AND cf.theme = :theme
+              AND r.status IN ('success', 'partial')
+              AND COALESCE(NULLIF(r.date_end, ''), NULLIF(r.date_start, '')) IS NOT NULL
+              AND COALESCE(NULLIF(r.date_end, ''), NULLIF(r.date_start, '')) <= :today
+            ORDER BY
+              COALESCE(NULLIF(r.date_end, ''), NULLIF(r.date_start, '')) DESC,
+              NULLIF(r.date_start, '') DESC,
+              r.id DESC
+            LIMIT 1
+            """,
+            {"borough_name": borough_name, "theme": theme, "today": today},
+        ).fetchone()
+
+    if row is None:
+        return None
+    source_row = json.loads(row["source_row_json"]) if row["source_row_json"] else None
+    return {**dict(row), "source_row": source_row}
+
+
 lat = 51.5074
 lon = -0.1278
 
+ensure_london_mapped_data()
 borough = resolve_borough(lat, lon)
 summary = get_borough_summary(lat, lon)
 
@@ -40,15 +81,17 @@ if borough:
             f"{md(dataset['dataset_title'])} | {md(dataset['resource_title'])} |"
         )
 
-    print("\n## First row for each theme\n")
+    print("\n## Most recent row for each theme\n")
     print("| Theme | Dataset | Resource | Row number | Date start | Date end | Source row preview |")
     print("|---|---|---|---:|---|---|---|")
     for theme in [item["theme"] for item in summary["themes"]]:
-        for row in iter_borough_data(lat, lon, theme=theme, batch_size=1):
+        row = latest_row_for_theme(borough["name"], theme)
+        if row:
             print(
-                f"| {theme} | {md(row['source']['dataset_title'])} | "
-                f"{md(row['source']['resource_title'])} | {row['row_number']} | "
+                f"| {theme} | {md(row['dataset_title'])} | "
+                f"{md(row['resource_title'])} | {row['row_number']} | "
                 f"{row['date_start'] or ''} | {row['date_end'] or ''} | "
                 f"{md(preview_source_row(row['source_row']))} |"
             )
-            break
+        else:
+            print(f"| {theme} |  |  |  |  |  | No dated row found |")
