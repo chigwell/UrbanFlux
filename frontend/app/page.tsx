@@ -1,5 +1,5 @@
-import { SiteHeader } from "@/components/marketing/SiteHeader";
-import { Hero } from "@/components/marketing/Hero";
+import { SiteHeader } from "@/components/home/SiteHeader";
+import { Hero } from "@/components/home/Hero";
 
 export default function HomePage() {
   return (

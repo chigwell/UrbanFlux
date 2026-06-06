@@ -137,7 +137,7 @@ export function CityTwinApp() {
       </div>
 
       <div className="pointer-events-none absolute inset-x-0 bottom-5 z-10 flex justify-center px-4">
-        <p className="pointer-events-auto max-w-xl rounded-lg border bg-card/95 px-4 py-2 text-center text-xs text-muted-foreground shadow-sm ring-1 ring-foreground/10 backdrop-blur-sm">
+        <p className="pointer-events-auto max-w-xl border-[0.5px] bg-card px-4 py-2 text-center text-xs text-muted-foreground">
           {hint}
         </p>
       </div>
