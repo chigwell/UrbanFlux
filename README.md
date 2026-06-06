@@ -60,7 +60,7 @@ Detailed notes:
   - do not spend too much time if the Thames fix becomes complex.
 - [x] Send selected-area coordinates from the frontend to the backend and display the returned approximate population for that area.
   - Sync with David on the API contract.
-- [ ] Send selected-area coordinates plus selected replanning UI parameters to the backend and display returned impact calculations.
+- [x] Send selected-area coordinates plus selected replanning UI parameters to the backend and display returned impact calculations.
   - Expected response shape:
 
 ```json
@@ -106,8 +106,6 @@ Detailed notes:
 - [ ] Build the MCP server for LLM-driven selection/replanning actions.
 - [ ] Fine-tune or adapt models for calculating replanning impact.
 
-
 # Saturday, June 6 - 3:00 PM Plan (`/impact` endpoint)
 
 ![](assets/1.png)
-
