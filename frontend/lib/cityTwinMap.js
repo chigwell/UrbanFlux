@@ -1,5 +1,9 @@
 import maplibregl from "maplibre-gl";
-import * as turf from "@turf/turf";
+import turfBbox from "@turf/bbox";
+import turfBuffer from "@turf/buffer";
+import turfBooleanIntersects from "@turf/boolean-intersects";
+import turfArea from "@turf/area";
+import turfCentroid from "@turf/centroid";
 
 const EMPTY = { type: "FeatureCollection", features: [] };
 const LONDON_CENTER = [-0.1276, 51.5072];
@@ -45,6 +49,7 @@ const MAX_WATER_OBSTACLES = 400;
 const CONTEXT_CACHE_MAX = 8;
 const OVERPASS_COOLDOWN_MS = 90_000;
 const OVERPASS_BBOX_CACHE_MAX = 12;
+const CONTEXT_FETCH_DEBOUNCE_MS = 520;
 // Per-kind caps for fetched context. A single flat cap let dense road counts
 // (tens of thousands in central London) starve water/building/park down to zero,
 // which removed the river masks and let the plan build over the Thames.
@@ -93,6 +98,8 @@ const state = {
   contextCache: new Map(),
   overpassCooldownUntil: 0,
   overpassBBoxCache: new Map(),
+  settledContextTimer: null,
+  lastGeneratedFeatures: [],
   toastTimer: null,
   mapReady: false,
   layersReady: false,
@@ -119,9 +126,14 @@ map.addControl(
 map.on("style.load", () => {
   initialiseMapLayers();
   refreshAllSources();
+  if (state.vertices.length < MIN_POLYGON_VERTICES) {
+    return;
+  }
+  // Invalidate the theme-scoped cache key but keep in-memory context/features on
+  // screen until the new basemap tiles are rendered and we can re-extract safely.
   state.contextKey = "";
-  state.contextStatus = "stale";
-  window.setTimeout(scheduleContextFetch, 220);
+  state.statsCache = null;
+  scheduleMapSettledContextFetch();
 });
 
 map.once("load", () => {
@@ -493,7 +505,9 @@ function refreshAllSources() {
   }
   updateSelectionSource();
   setSourceData("context", { type: "FeatureCollection", features: state.contextFeatures });
-  scheduleGeneration();
+  // Re-render immediately after a style swap — debounced generation would briefly
+  // clear output when contextStatus was previously set to "stale".
+  generateScenario();
 }
 
 function setSourceData(sourceId, data) {
@@ -546,17 +560,23 @@ function loadDemoZone(showMessage = false) {
   ];
   renderVertexMarkers();
   updateSelectionSource();
-  fitToZone();
-  scheduleContextFetch();
-  scheduleGeneration();
+  fitToZone({ animated: showMessage });
+  queueInitialContextFetch();
   if (showMessage) {
     showToast("Demo zone restored. Water override is off by default, so mapped rivers are excluded from generation.");
   }
 }
 
-function fitToZone() {
+function fitToZone(options = {}) {
+  const animated = options.animated === true;
   if (state.vertices.length === 0) {
-    map.easeTo({ center: LONDON_CENTER, zoom: 12.4, pitch: 57, bearing: -18, duration: 700 });
+    map.easeTo({
+      center: LONDON_CENTER,
+      zoom: 12.4,
+      pitch: 57,
+      bearing: -18,
+      duration: animated ? 700 : 0,
+    });
     return;
   }
   const bounds = state.vertices.reduce(
@@ -567,7 +587,7 @@ function fitToZone() {
     padding: { top: 94, bottom: 92, left: 380, right: 440 },
     pitch: 57,
     bearing: -18,
-    duration: 760,
+    duration: animated ? 760 : 0,
     maxZoom: 15.2,
   });
 }
@@ -697,12 +717,46 @@ function scheduleGeneration() {
   });
 }
 
-function scheduleContextFetch() {
+function scheduleContextFetch(options = {}) {
   if (state.vertices.length < MIN_POLYGON_VERTICES) {
     return;
   }
   window.clearTimeout(state.contextTimer);
-  state.contextTimer = window.setTimeout(fetchContextForCurrentPolygon, 520);
+  const delay = options.urgent ? 0 : CONTEXT_FETCH_DEBOUNCE_MS;
+  state.contextTimer = window.setTimeout(fetchContextForCurrentPolygon, delay);
+}
+
+function queueInitialContextFetch() {
+  window.clearTimeout(state.contextTimer);
+  const run = () => {
+    state.contextTimer = null;
+    fetchContextForCurrentPolygon();
+  };
+  if (!map.isStyleLoaded() || map.isMoving()) {
+    map.once("idle", run);
+    return;
+  }
+  run();
+}
+
+function scheduleMapSettledContextFetch() {
+  window.clearTimeout(state.settledContextTimer);
+  const queue = () => {
+    state.settledContextTimer = window.setTimeout(() => {
+      if (state.vertices.length >= MIN_POLYGON_VERTICES) {
+        scheduleContextFetch();
+      }
+    }, 280);
+  };
+  if (!map.isStyleLoaded() || map.isMoving()) {
+    map.once("idle", queue);
+    return;
+  }
+  queue();
+}
+
+function buildContextKey(bbox) {
+  return `${state.theme}:${bbox.map((value) => value.toFixed(4)).join(",")}`;
 }
 
 function applyContextResult(status, features) {
@@ -728,15 +782,19 @@ function cacheOverpassPayload(bboxKey, features) {
   }
 }
 
+async function waitForMapSettled() {
+  if (!map.isStyleLoaded() || map.isMoving()) {
+    await new Promise((resolve) => map.once("idle", resolve));
+  }
+}
+
 async function fetchContextForCurrentPolygon() {
   if (state.vertices.length < MIN_POLYGON_VERTICES) {
     return;
   }
   const polygon = polygonFeature(state.vertices);
-  const bbox = expandBbox(turf.bbox(polygon), 0.0062);
-  const contextKey = `${state.theme}:${Math.round(map.getZoom() * 10)}:${bbox
-    .map((value) => value.toFixed(4))
-    .join(",")}`;
+  const bbox = expandBbox(turfBbox(polygon), 0.0062);
+  const contextKey = buildContextKey(bbox);
   const cached = state.contextCache.get(contextKey);
   if (cached) {
     state.contextKey = contextKey;
@@ -749,6 +807,7 @@ async function fetchContextForCurrentPolygon() {
   }
   state.contextKey = contextKey;
   state.statsCache = null;
+  const previousContextStatus = state.contextStatus;
 
   if (state.contextFetchController) {
     state.contextFetchController.abort();
@@ -756,10 +815,22 @@ async function fetchContextForCurrentPolygon() {
   state.contextFetchController = new AbortController();
   state.contextStatus = "fetching";
 
+  if (state.contextFeatures.length === 0) {
+    await waitForMapSettled();
+  }
+
   setStatus(34, "Reading vector basemap topology for roads, rivers, buildings and parks...");
-  const vectorFeatures = extractVectorTileContextFeatures({ selectedPolygon: polygon, bbox });
+  let vectorFeatures = extractVectorTileContextFeatures({ selectedPolygon: polygon, bbox });
+  if (!vectorContextLooksReady(vectorFeatures) && state.contextFeatures.length > 0) {
+    state.contextStatus = WATER_CONTEXT_READY_STATES.has(previousContextStatus) ? previousContextStatus : "vector";
+    setSourceData("context", { type: "FeatureCollection", features: state.contextFeatures });
+    scheduleMapSettledContextFetch();
+    generateScenario();
+    return;
+  }
   if (vectorFeatures.length > 0) {
     applyContextResult("vector", vectorFeatures);
+    generateScenario();
     setStatus(
       54,
       `Loaded ${vectorFeatures.length.toLocaleString()} vector-tile features. Fetching raw OSM road graph for exact boundary anchors...`,
@@ -782,9 +853,12 @@ async function fetchContextForCurrentPolygon() {
 
   if (Date.now() < state.overpassCooldownUntil) {
     if (vectorFeatures.length > 0) {
+      applyContextResult("vector", vectorFeatures);
       cacheContextResult(contextKey, "vector", vectorFeatures);
       setStatus(68, "Overpass cooling down. Using vector-tile topology.");
       generateScenario();
+    } else {
+      state.contextStatus = WATER_CONTEXT_READY_STATES.has(previousContextStatus) ? previousContextStatus : state.contextStatus;
     }
     return;
   }
@@ -1240,7 +1314,7 @@ function featureFromCoords(coords, kind, tags, osmId) {
 }
 
 function createContextFilterCtx(selectedPolygon) {
-  const searchBbox = expandBbox(turf.bbox(selectedPolygon), 0.0035);
+  const searchBbox = expandBbox(turfBbox(selectedPolygon), 0.0035);
   const coords = selectedPolygon.geometry.coordinates[0];
   const selectionRing =
     coords.length >= 4 && sameCoord(coords[0], coords[coords.length - 1]) ? coords.slice(0, -1) : coords;
@@ -1433,6 +1507,10 @@ function generateScenario() {
   }
   state.latestStats = stats;
   if (!state.allowWater && !waterContextReady()) {
+    if (state.lastGeneratedFeatures.length > 0) {
+      setSourceData("generated", { type: "FeatureCollection", features: state.lastGeneratedFeatures });
+      return;
+    }
     setSourceData("generated", EMPTY);
     updateMetrics(null);
     updatePills(stats);
@@ -1453,6 +1531,7 @@ function generateScenario() {
     allowWater: state.allowWater,
   });
 
+  state.lastGeneratedFeatures = generated.features;
   setSourceData("generated", { type: "FeatureCollection", features: generated.features });
   updateMetrics(generated.metrics);
   updatePills(stats);
@@ -1467,7 +1546,23 @@ function generateScenario() {
 }
 
 function waterContextReady() {
-  return WATER_CONTEXT_READY_STATES.has(state.contextStatus);
+  if (WATER_CONTEXT_READY_STATES.has(state.contextStatus)) {
+    return true;
+  }
+  // Keep generating from in-memory context during style swaps, zoom/pan tile
+  // reloads, and background refetches — only block when context truly failed.
+  return state.contextFeatures.length > 0 && state.contextStatus !== "failed";
+}
+
+function vectorContextLooksReady(vectorFeatures) {
+  if (vectorFeatures.length === 0) {
+    return false;
+  }
+  if (state.contextFeatures.length === 0) {
+    return true;
+  }
+  // queryRenderedFeatures returns little/nothing until vector tiles paint after setStyle.
+  return vectorFeatures.length >= Math.max(24, state.contextFeatures.length * 0.3);
 }
 
 function buildContextStats({ features, selectedPolygon, frame, localPolygon }) {
@@ -1519,7 +1614,7 @@ function buildWaterObstacles({ water, selectedPolygon, frame }) {
   for (const feature of water) {
     try {
       for (const mask of createWaterMasks(feature)) {
-        if (!mask || !turf.booleanIntersects(mask, selectedPolygon)) {
+        if (!mask || !turfBooleanIntersects(mask, selectedPolygon)) {
           continue;
         }
         for (const ring of collectPolygonRings(mask)) {
@@ -1537,20 +1632,38 @@ function buildWaterObstacles({ water, selectedPolygon, frame }) {
   return dedupeWaterObstacles(obstacles).slice(0, MAX_WATER_OBSTACLES);
 }
 
+// The buffered mask is in lng/lat and depends only on the water feature itself,
+// not on the drawn polygon or local frame. Cache it on the feature object so a
+// drag replan reuses it; a context refetch creates fresh feature objects, which
+// naturally invalidates the cache.
 function createWaterMasks(feature) {
   if (!feature?.geometry) {
     return [];
   }
+  if (feature._waterMasks) {
+    return feature._waterMasks;
+  }
+  const masks = computeWaterMasks(feature);
+  Object.defineProperty(feature, "_waterMasks", {
+    value: masks,
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  });
+  return masks;
+}
+
+function computeWaterMasks(feature) {
   const geometryType = feature.geometry.type;
   if (geometryType === "LineString" || geometryType === "MultiLineString") {
-    const buffered = turf.buffer(feature, waterMaskWidthKm(feature), {
+    const buffered = turfBuffer(feature, waterMaskWidthKm(feature), {
       units: "kilometers",
       steps: 12,
     });
     return buffered ? [buffered] : [];
   }
   if (geometryType === "Polygon" || geometryType === "MultiPolygon") {
-    const buffered = turf.buffer(feature, WATER_POLYGON_EXCLUSION_KM, {
+    const buffered = turfBuffer(feature, WATER_POLYGON_EXCLUSION_KM, {
       units: "kilometers",
       steps: 12,
     });
@@ -1886,7 +1999,7 @@ function roadSearchRadiusMeters(highway) {
 function generateUrbanLayout({ selectedPolygon, frame, localPolygon, centroid, stats, random, settings, allowWater }) {
   const features = [];
   const localBbox = localBounds(localPolygon);
-  const areaSqm = turf.area(selectedPolygon);
+  const areaSqm = turfArea(selectedPolygon);
   const areaHa = areaSqm / 10000;
   const density = settings.density / 100;
   const green = settings.green / 100;
@@ -2580,7 +2693,7 @@ function estimateWaterAreaInside(obstacles, selectedPolygon, frame) {
   if (obstacles.length === 0) {
     return 0;
   }
-  const selectedArea = turf.area(selectedPolygon);
+  const selectedArea = turfArea(selectedPolygon);
   let area = 0;
   for (const obstacle of obstacles) {
     area += Math.abs(polygonSignedArea(obstacle));
@@ -2673,7 +2786,7 @@ function localPolygonFeature(points, frame, properties) {
 }
 
 function createLocalFrame(polygon) {
-  const center = turf.centroid(polygon).geometry.coordinates;
+  const center = turfCentroid(polygon).geometry.coordinates;
   return {
     center,
     cosLat: Math.cos(center[1] * DEG_TO_RAD),

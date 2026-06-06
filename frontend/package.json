@@ -10,7 +10,11 @@
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.3.0",
-    "@turf/turf": "^7.3.0",
+    "@turf/area": "^7.3.0",
+    "@turf/bbox": "^7.3.0",
+    "@turf/boolean-intersects": "^7.3.0",
+    "@turf/buffer": "^7.3.0",
+    "@turf/centroid": "^7.3.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.17.0",

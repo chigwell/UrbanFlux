@@ -6,13 +6,12 @@ import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { ArrowLeftIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  initCityTwinMap,
-  type CityTwinHandle,
-  type CityTwinMetrics,
-  type CityTwinPills,
-  type CityTwinSettingKey,
-  type CityTwinSettings,
+import type {
+  CityTwinHandle,
+  CityTwinMetrics,
+  CityTwinPills,
+  CityTwinSettingKey,
+  CityTwinSettings,
 } from "@/lib/cityTwinMap";
 import { ControlsCard } from "./ControlsCard";
 import { DashboardCard } from "./DashboardCard";
@@ -45,28 +44,37 @@ export function CityTwinApp() {
 
   useEffect(() => setMounted(true), []);
 
-  // Mount the vanilla engine exactly once; React drives it through the handle.
+  // Mount the vanilla engine exactly once; lazy-load the heavy map bundle first.
   useEffect(() => {
+    let cancelled = false;
     const initialDark = document.documentElement.classList.contains("dark");
-    const handle = initCityTwinMap({
-      container: "map",
-      initialTheme: initialDark ? "dark" : "light",
-      initialAllowWater: false,
-      initialSettings: DEFAULT_SETTINGS,
-      onStatus: (value, text) => {
-        setProgress(value);
-        setStatus(text);
-      },
-      onMetrics: setMetrics,
-      onScenario: setScenario,
-      onReport: setReport,
-      onHint: setHint,
-      onPills: setPills,
-      onToast: (text) => toast(text),
+
+    import("@/lib/cityTwinMap").then(({ initCityTwinMap }) => {
+      if (cancelled) {
+        return;
+      }
+      const handle = initCityTwinMap({
+        container: "map",
+        initialTheme: initialDark ? "dark" : "light",
+        initialAllowWater: false,
+        initialSettings: DEFAULT_SETTINGS,
+        onStatus: (value, text) => {
+          setProgress(value);
+          setStatus(text);
+        },
+        onMetrics: setMetrics,
+        onScenario: setScenario,
+        onReport: setReport,
+        onHint: setHint,
+        onPills: setPills,
+        onToast: (text) => toast(text),
+      });
+      handleRef.current = handle;
     });
-    handleRef.current = handle;
+
     return () => {
-      handle.destroy();
+      cancelled = true;
+      handleRef.current?.destroy();
       handleRef.current = null;
     };
   }, []);
