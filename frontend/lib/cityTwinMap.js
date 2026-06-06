@@ -1186,6 +1186,8 @@ export function initCityTwinMap(options = {}) {
           value: metric.improved_value,
           delta: metric.delta,
           source: metric.source,
+          methodologySource: metric.methodology_source,
+          basis: metric.basis,
         })),
       });
     } catch (error) {

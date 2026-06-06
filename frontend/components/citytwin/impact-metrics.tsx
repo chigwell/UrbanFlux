@@ -155,6 +155,22 @@ export function ImpactMetricCards({
                 </a>
               ) : null}
             </div>
+            {metric.basis ? (
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {metric.basis}
+              </p>
+            ) : null}
+            {metric.methodologySource ? (
+              <a
+                href={metric.methodologySource}
+                target="_blank"
+                rel="noreferrer"
+                title={metric.methodologySource}
+                className="mt-1 inline-block max-w-full truncate text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                Methodology: {sourceLabel(metric.methodologySource)}
+              </a>
+            ) : null}
           </div>
         );
       })}

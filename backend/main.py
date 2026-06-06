@@ -279,7 +279,18 @@ class ImpactMetric(BaseModel):
     improved_metric: str = Field(..., description="Name of the improved metric.")
     improved_value: str = Field(..., description="Estimated metric value after replanning.")
     delta: str = Field(..., description="Difference compared with the previous or baseline value.")
-    source: str = Field(..., description="Validated source URL, or an empty string if no valid source is available.")
+    source: str = Field(
+        ...,
+        description="Primary London Datastore dataset or CSV URL backing the estimate, or an empty string.",
+    )
+    methodology_source: str = Field(
+        "",
+        description="Optional external method URL used for the calculation, never the primary data source.",
+    )
+    basis: str = Field(
+        "",
+        description="Short explanation of the mapped data and selected-area inputs used.",
+    )
 
 
 class ImpactRequest(BaseModel):
@@ -304,7 +315,9 @@ class ImpactResponse(BaseModel):
                             "improved_metric": "Cycling mode share",
                             "improved_value": "+1.5 percentage points",
                             "delta": "+1.5pp vs baseline",
-                            "source": "https://tfl.gov.uk/corporate/publications-and-reports/streets-toolkit",
+                            "source": "https://data.london.gov.uk/dataset/example-transport-data/",
+                            "methodology_source": "https://tfl.gov.uk/corporate/publications-and-reports/streets-toolkit",
+                            "basis": "Mapped Westminster transport row + selected area/sliders",
                         }
                     ],
                     "note": "Illustrative estimates - model integration in progress",
@@ -419,17 +432,66 @@ def _area_km2(geom) -> float:
     return geom_m.area / 1_000_000
 
 
+_METHODOLOGY_TFL_STREETS = "https://tfl.gov.uk/corporate/publications-and-reports/streets-toolkit"
+_METHODOLOGY_WHO_HEAT = "https://www.who.int/tools/heat-for-walking-and-cycling"
+_METHODOLOGY_URBAN_GREENING = (
+    "https://www.london.gov.uk/programmes-strategies/environment-and-climate-change/"
+    "parks-green-spaces-and-biodiversity/urban-greening"
+)
+_METHODOLOGY_LONDON_PLAN_TRANSPORT = (
+    "https://www.london.gov.uk/programmes-strategies/planning/london-plan/"
+    "the-london-plan-2021-online/chapter-10-transport"
+)
+
+
+def _is_london_datastore_url(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    return parsed.scheme in {"http", "https"} and parsed.netloc == "data.london.gov.uk"
+
+
+def _row_source(row: dict[str, Any] | None) -> str:
+    if not row:
+        return ""
+    for key in ("source_url", "dataset_url", "csv_url"):
+        source = _normalise_source_url(row.get(key))
+        if source and _is_london_datastore_url(source):
+            return source
+    return ""
+
+
+def _row_basis(
+    borough_name: str,
+    theme_label: str,
+    row: dict[str, Any] | None,
+    source: str,
+) -> str:
+    borough = borough_name or "resolved borough"
+    if source:
+        title = (
+            (row or {}).get("dataset_title")
+            or (row or {}).get("resource_title")
+            or "mapped London Datastore"
+        )
+        return f"Mapped {borough} {theme_label} row ({title}) + selected area/sliders"
+    return f"Benchmark method only; mapped {theme_label} borough row unavailable"
+
+
 def _compute_impact_metrics(
     population: int,
     area_km2: float,
     params: ReplanningParams,
+    borough_name: str = "",
+    rows_by_theme: dict[str, dict[str, Any]] | None = None,
 ) -> list[ImpactMetric]:
     """
-    Return illustrative impact metrics.
+    Return London-data-first impact metrics.
 
-    These are intentionally conservative estimates derived from published
-    London / TfL benchmarks.  Eugene's model will replace this function.
+    Values are deterministic estimates from selected-area population/size and
+    replanning sliders. The primary source, when available, is the mapped
+    London Datastore row for the resolved borough. External links are retained
+    only as methodology references.
     """
+    rows_by_theme = rows_by_theme or {}
 
     density = params.housing_density / 100
     parking_pressure = params.parking_pressure / 100
@@ -465,36 +527,59 @@ def _compute_impact_metrics(
     # 1 000 residents prevents ~0.4 premature deaths/year.
     lives_saved_per_year = round((road_km / max(population, 1)) * 1000 * 0.4, 2)
 
+    transport_row = rows_by_theme.get("transport")
+    housing_row = rows_by_theme.get("housing")
+    planning_row = rows_by_theme.get("planning_land")
+    socioeconomic_row = rows_by_theme.get("socioeconomic")
+
+    transport_source = _row_source(transport_row)
+    housing_source = _row_source(housing_row)
+    planning_source = _row_source(planning_row)
+    socioeconomic_source = _row_source(socioeconomic_row)
+
     metrics: list[ImpactMetric] = [
         ImpactMetric(
             improved_metric="Cycling mode share",
             improved_value=f"+{cycling_boost_pp} percentage points",
             delta=f"+{cycling_boost_pp}pp vs baseline",
-            source="https://tfl.gov.uk/corporate/publications-and-reports/streets-toolkit",
+            source=transport_source,
+            methodology_source=_METHODOLOGY_TFL_STREETS,
+            basis=_row_basis(borough_name, "transport", transport_row, transport_source),
         ),
         ImpactMetric(
             improved_metric="Housing capacity",
             improved_value=f"+{homes_capacity_uplift_pct}%",
             delta=f"+{homes_capacity_uplift_pct}% vs baseline massing",
-            source="https://data.london.gov.uk/dataset/land-area-and-population-density-ward-and-borough-e1zp8/",
+            source=housing_source,
+            basis=_row_basis(borough_name, "housing", housing_row, housing_source),
         ),
         ImpactMetric(
             improved_metric="Local summer heat exposure",
             improved_value=f"-{cooling_c} °C",
             delta=f"-{cooling_c} °C local heat proxy vs low-greening scenario",
-            source="https://www.london.gov.uk/programmes-strategies/environment-and-climate-change/parks-green-spaces-and-biodiversity/urban-greening",
+            source=planning_source,
+            methodology_source=_METHODOLOGY_URBAN_GREENING,
+            basis=_row_basis(borough_name, "planning/land", planning_row, planning_source),
         ),
         ImpactMetric(
             improved_metric="Productive land released from parking",
             improved_value=f"+{productive_land_gain_pct}%",
             delta=f"+{productive_land_gain_pct}% vs maximum parking pressure",
-            source="https://www.london.gov.uk/programmes-strategies/planning/london-plan/the-london-plan-2021-online/chapter-10-transport",
+            source=planning_source,
+            methodology_source=_METHODOLOGY_LONDON_PLAN_TRANSPORT,
+            basis=_row_basis(borough_name, "planning/land", planning_row, planning_source),
         ),
         ImpactMetric(
             improved_metric="Premature deaths prevented (active travel)",
             improved_value=f"{lives_saved_per_year} lives/year",
             delta=f"+{lives_saved_per_year} vs baseline",
-            source="https://www.who.int/tools/heat-for-walking-and-cycling",
+            source=socioeconomic_source or transport_source,
+            methodology_source=_METHODOLOGY_WHO_HEAT,
+            basis=(
+                _row_basis(borough_name, "socioeconomic", socioeconomic_row, socioeconomic_source)
+                if socioeconomic_source
+                else _row_basis(borough_name, "transport", transport_row, transport_source)
+            ),
         ),
     ]
 
@@ -511,18 +596,19 @@ You will be given:
 - Area statistics: population, size in km², and borough name
 - Replanning parameters chosen by a planner (housing density, green space target, parking pressure, road fill, road alignment, height ambition) — all as integers 0–100
 - Real borough data rows from the London Datastore (housing, transport, planning, socioeconomic themes)
-- Benchmark impact metrics already calculated from published sources
+- London-data-first impact metrics already calculated from selected-area inputs and mapped borough data
 
-Your task is to return a JSON array of impact metrics, using the benchmark values as a baseline and refining them where the real borough data justifies it.
+Your task is to return a JSON array of impact metrics, using the provided London-data-first values as a baseline and refining them only where the real borough data justifies it.
 
 Rules:
 - Only use the sources and data provided. Do not hallucinate statistics, datasets, or sources.
-- The source field must be either "" or exactly one URL from the allowed source URLs list in the user prompt. Do not create, repair, shorten, or guess URLs.
-- If real borough data supports a more precise estimate, use it and cite the dataset.
+- The source field must be either "" or exactly one London Datastore URL from the allowed source URLs list in the user prompt. Do not create, repair, shorten, or guess URLs.
+- External methodology URLs such as TfL or WHO must never appear in source. They may appear only in methodology_source if they were already provided.
+- If real borough data supports a more precise estimate, use it and cite the mapped London Datastore dataset in source.
 - If there is no relevant data for a metric, set improved_value and delta to "" (empty string).
 - Treat Local summer heat exposure as a conservative local microclimate / heat-exposure proxy only. Never describe it as citywide weather, forecast weather, or an actual air-temperature change across London.
 - Return ONLY a valid JSON array. No preamble, no explanation, no markdown, no code fences.
-- Every object in the array must have exactly these four string fields: improved_metric, improved_value, delta, source.
+- Every object in the array must have exactly these six string fields: improved_metric, improved_value, delta, source, methodology_source, basis.
 
 Example output format:
 [
@@ -530,7 +616,9 @@ Example output format:
     "improved_metric": "Cycling mode share",
     "improved_value": "+3.2 percentage points",
     "delta": "+3.2pp vs baseline",
-    "source": "https://tfl.gov.uk/corporate/publications-and-reports/streets-toolkit"
+    "source": "https://data.london.gov.uk/dataset/example-transport-data/",
+    "methodology_source": "https://tfl.gov.uk/corporate/publications-and-reports/streets-toolkit",
+    "basis": "Mapped Westminster transport row + selected area/sliders"
   }
 ]"""
 
@@ -581,24 +669,14 @@ def _source_url_is_live(url: str) -> bool:
 
 
 def _validate_metric_sources(metrics: list[ImpactMetric], allowed_sources: set[str]) -> list[ImpactMetric]:
-    candidate_sources = sorted({
-        source
-        for source in (_normalise_source_url(metric.source) for metric in metrics)
-        if source and source in allowed_sources and _source_url_is_well_formed(source)
-    })
+    """
+    Keep primary sources constrained to mapped London Datastore URLs.
 
-    with ThreadPoolExecutor(max_workers=_SOURCE_VALIDATION_MAX_WORKERS) as executor:
-        live_sources = {
-            source
-            for source, is_live in zip(
-                candidate_sources,
-                executor.map(_source_url_is_live, candidate_sources),
-            )
-            if is_live
-        }
-
+    We intentionally do not live-check the URLs here: source validation should
+    enforce provenance, not make metrics disappear because a source site is slow.
+    """
     return [
-        metric.model_copy(update={"source": source if source in live_sources else ""})
+        metric.model_copy(update={"source": source if source in allowed_sources else ""})
         for metric in metrics
         for source in [_normalise_source_url(metric.source)]
     ]
@@ -610,38 +688,46 @@ def _source_catalogue_text(allowed_sources: set[str]) -> str:
     return "\n".join(f"- {source}" for source in sorted(allowed_sources))
 
 
-def _fetch_borough_rows(lat: float, lon: float) -> tuple[str, set[str]]:
+def _fetch_borough_context(
+    lat: float,
+    lon: float,
+) -> tuple[str, dict[str, dict[str, Any]], str, set[str]]:
     """
-    Pull the latest row preview for each trusted theme from Eugene's SQLite
-    via the live /borough-data-test endpoint. Returns a formatted prompt
-    block plus the source URLs that Nemotron is allowed to cite.
+    Pull latest mapped rows for trusted themes from Eugene's SQLite path.
+
+    Returns (borough_name, rows_by_theme, prompt_text, allowed_sources). The
+    allowed sources are only underlying London Datastore URLs, never the
+    UrbanFlux wrapper endpoint.
     """
     try:
-        params = urllib.parse.urlencode({"lat": lat, "lon": lon})
-        req = urllib.request.Request(
-            f"https://api.urbanflux.london/borough-data-test?{params}",
-            headers={"User-Agent": "UrbanFlux/1.0"},
+        data = build_borough_data_test_response(
+            lat=lat,
+            lon=lon,
+            top_datasets_limit=30,
         )
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            data = json.loads(resp.read())
     except Exception:
-        return "", set()
+        return "", {}, "", set()
 
     lines = []
     allowed_sources: set[str] = set()
+    rows_by_theme: dict[str, dict[str, Any]] = {}
     borough_name = (data.get("borough") or {}).get("name", "")
     if borough_name:
         lines.append(f"Borough: {borough_name}")
 
     for row in data.get("latest_rows_by_theme", []):
-        if row.get("theme") not in _TRUSTED_THEMES:
+        theme = row.get("theme")
+        if theme not in _TRUSTED_THEMES:
             continue
+        rows_by_theme[theme] = row
         preview = (row.get("source_row_preview") or "").strip()
         date = row.get("date_start") or ""
-        source_url = row.get("source_url") or row.get("dataset_url") or row.get("csv_url") or ""
+        source_url = _row_source(row)
+        if source_url:
+            allowed_sources.add(source_url)
         for source in (row.get("source_url"), row.get("dataset_url"), row.get("csv_url")):
             source = _normalise_source_url(source)
-            if source:
+            if source and _is_london_datastore_url(source):
                 allowed_sources.add(source)
         dataset_title = row.get("dataset_title") or "Unknown dataset"
         resource_title = row.get("resource_title") or "Unknown resource"
@@ -651,12 +737,22 @@ def _fetch_borough_rows(lat: float, lon: float) -> tuple[str, set[str]]:
                 f"(dataset: {dataset_title}; resource: {resource_title}; source: {source_url})"
             )
 
-    return "\n".join(lines), allowed_sources
+    return borough_name, rows_by_theme, "\n".join(lines), allowed_sources
+
+
+def _fetch_borough_rows(lat: float, lon: float) -> tuple[str, set[str]]:
+    """Compatibility wrapper for tests and Nemotron prompt formatting."""
+    _, _, borough_rows, allowed_sources = _fetch_borough_context(lat, lon)
+    return borough_rows, allowed_sources
 
 
 def _metrics_to_text(metrics: list[ImpactMetric]) -> str:
     return "\n".join(
-        f"- {m.improved_metric}: {m.improved_value} (delta: {m.delta}, source: {m.source})"
+        (
+            f"- {m.improved_metric}: {m.improved_value} "
+            f"(delta: {m.delta}, source: {m.source}, "
+            f"methodology_source: {m.methodology_source}, basis: {m.basis})"
+        )
         for m in metrics
     )
 
@@ -708,6 +804,8 @@ def _call_nemotron(prompt: str) -> list[ImpactMetric] | None:
                 improved_value=str(item.get("improved_value", "")),
                 delta=str(item.get("delta", "")),
                 source=str(item.get("source", "")),
+                methodology_source=str(item.get("methodology_source", "")),
+                basis=str(item.get("basis", "")),
             ))
         return metrics if metrics else None
     except (json.JSONDecodeError, Exception):
@@ -718,27 +816,23 @@ def _nemotron_impact_metrics(
     population: int,
     area_km2: float,
     params: ReplanningParams,
-    benchmark_metrics: list[ImpactMetric],
-    lat: float,
-    lon: float,
+    london_metrics: list[ImpactMetric],
+    borough_name: str,
+    borough_rows: str,
+    borough_sources: set[str],
 ) -> tuple[list[ImpactMetric], str]:
     """
     Try to get Nemotron-refined metrics within the timeout window.
-    Falls back to benchmark metrics if Nemotron is too slow or unavailable.
+    Falls back to London-data-first deterministic metrics if Nemotron is too
+    slow or unavailable.
     Returns (metrics, note).
     """
-    borough_rows, borough_sources = _fetch_borough_rows(lat, lon)
     allowed_sources = {
         _normalise_source_url(metric.source)
-        for metric in benchmark_metrics
+        for metric in london_metrics
         if _normalise_source_url(metric.source)
     }
     allowed_sources.update(borough_sources)
-    borough_name = ""
-    for line in borough_rows.splitlines():
-        if line.startswith("Borough:"):
-            borough_name = line.replace("Borough:", "").strip()
-            break
 
     prompt = f"""Area statistics:
 - Population: {population:,}
@@ -756,10 +850,10 @@ Replanning parameters (0–100 scale):
 Real borough data from London Datastore:
 {borough_rows if borough_rows else "(unavailable)"}
 
-Benchmark impact metrics (use as baseline):
-{_metrics_to_text(benchmark_metrics)}
+London-data-first impact metrics (use as baseline):
+{_metrics_to_text(london_metrics)}
 
-Allowed source URLs:
+Allowed source URLs for the source field (London Datastore only):
 {_source_catalogue_text(allowed_sources)}
 
 Return the refined JSON array of impact metrics."""
@@ -781,11 +875,14 @@ Return the refined JSON array of impact metrics."""
         return nemotron_metrics, note
 
     # Fallback
-    note = (
-        f"Benchmark estimates for {borough_name}" if borough_name
-        else "Illustrative benchmark estimates"
-    )
-    return _validate_metric_sources(benchmark_metrics, allowed_sources), note
+    has_london_sources = any(_normalise_source_url(metric.source) for metric in london_metrics)
+    if borough_name and has_london_sources:
+        note = f"London Datastore mapped estimates for {borough_name}"
+    elif borough_name:
+        note = f"Benchmark-method estimates for {borough_name}; mapped rows unavailable"
+    else:
+        note = "Benchmark-method estimates; mapped borough data unavailable"
+    return _validate_metric_sources(london_metrics, allowed_sources), note
 
 
 # ---------------------------------------------------------------------------
@@ -875,10 +972,10 @@ def get_impact(request: ImpactRequest) -> ImpactResponse:
 
     Flow:
     1. Calculate population from LSOA intersection.
-    2. Compute benchmark metrics from published London/TfL sources.
-    3. Fetch real borough data rows from the London Datastore (via SQLite).
-    4. Pass everything to Nvidia Nemotron for refinement (12 s timeout).
-    5. Fall back to benchmark metrics if Nemotron is unavailable or too slow.
+    2. Resolve the selected area's centroid to mapped London Datastore borough rows.
+    3. Compute London-data-first metrics from selected area, UI parameters, and mapped rows.
+    4. Optionally pass everything to Nvidia Nemotron for refinement (12 s timeout).
+    5. Fall back to deterministic London-data-first metrics if Nemotron is unavailable or too slow.
     """
     geom = _extract_shapely_geom(request.polygon)
     area = _area_km2(geom)
@@ -888,16 +985,26 @@ def get_impact(request: ImpactRequest) -> ImpactResponse:
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
-    benchmark_metrics = _compute_impact_metrics(population, area, request.params)
-
     centroid = geom.centroid
+    borough_name, rows_by_theme, borough_rows, borough_sources = _fetch_borough_context(
+        lat=centroid.y,
+        lon=centroid.x,
+    )
+    london_metrics = _compute_impact_metrics(
+        population,
+        area,
+        request.params,
+        borough_name=borough_name,
+        rows_by_theme=rows_by_theme,
+    )
     metrics, note = _nemotron_impact_metrics(
         population=population,
         area_km2=round(area, 4),
         params=request.params,
-        benchmark_metrics=benchmark_metrics,
-        lat=centroid.y,
-        lon=centroid.x,
+        london_metrics=london_metrics,
+        borough_name=borough_name,
+        borough_rows=borough_rows,
+        borough_sources=borough_sources,
     )
 
     return ImpactResponse(

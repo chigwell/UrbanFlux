@@ -71,8 +71,12 @@ export interface CityTwinImpactMetric {
   metric: string;
   value: string;
   delta: string;
-  /** Validated London data-portal / benchmark URL backing the estimate, or empty when unavailable. */
+  /** Primary London Datastore dataset/resource URL, or empty when unavailable. */
   source: string;
+  /** Optional external methodology URL, e.g. TfL or WHO. */
+  methodologySource?: string;
+  /** Short explanation of the data/method basis for the estimate. */
+  basis?: string;
 }
 
 /** Replanning impact for the selected area + chosen params, from the backend. */
