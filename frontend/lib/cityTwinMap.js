@@ -1358,9 +1358,11 @@ export function initCityTwinMap(options = {}) {
       }
       const data = await response.json();
       state.populationKey = key;
+      const approximatePopulation = Number(data.approximate_population);
       emit.onPopulation({
         status: "ready",
-        population: Number(data.approximate_population).toLocaleString(),
+        approximatePopulation,
+        population: approximatePopulation.toLocaleString(),
         lsoaCount: data.lsoa_count,
         areaKm2: data.area_km2,
         note: data.note,

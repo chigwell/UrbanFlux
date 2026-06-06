@@ -79,6 +79,8 @@ export interface CityTwinPills {
 /** Approximate population for the selected area, fetched from the backend. */
 export interface CityTwinPopulation {
   status: "loading" | "ready" | "error";
+  /** Raw endpoint count. Present when `status` is "ready". */
+  approximatePopulation?: number;
   /** Formatted count, e.g. "12,480". Present when `status` is "ready". */
   population?: string;
   lsoaCount?: number;
