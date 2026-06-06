@@ -1432,6 +1432,7 @@ export function initCityTwinMap(options = {}) {
       const data = await response.json();
       console.info("[UrbanFlux] Impact calculation engine", {
         engine: data.calculation_engine || "unknown",
+        reason: data.calculation_reason || "unknown",
         note: data.note || "",
       });
       state.impactKey = key;
@@ -1439,6 +1440,7 @@ export function initCityTwinMap(options = {}) {
         status: "ready",
         note: data.note,
         calculationEngine: data.calculation_engine,
+        calculationReason: data.calculation_reason,
         metrics: (data.metrics || []).map((metric) => ({
           metric: metric.improved_metric,
           value: metric.improved_value,

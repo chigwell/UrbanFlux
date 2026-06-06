@@ -72,7 +72,7 @@ def _nemotron_impact_metrics(
     borough_name: str,
     borough_rows: str,
     borough_sources: set[str],
-) -> tuple[list[ImpactMetric], str, str]:
+) -> tuple[list[ImpactMetric], str, str, str]:
     return _nemotron_impact_metrics_impl(
         population=population,
         area_km2=area_km2,
@@ -189,7 +189,7 @@ def get_impact(request: ImpactRequest) -> ImpactResponse:
         borough_name=borough_name,
         rows_by_theme=rows_by_theme,
     )
-    metrics, note, calculation_engine = _nemotron_impact_metrics(
+    metrics, note, calculation_engine, calculation_reason = _nemotron_impact_metrics(
         population=population,
         area_km2=round(area, 4),
         params=request.params,
@@ -205,6 +205,7 @@ def get_impact(request: ImpactRequest) -> ImpactResponse:
         metrics=metrics,
         note=note,
         calculation_engine=calculation_engine,
+        calculation_reason=calculation_reason,
     )
 
 

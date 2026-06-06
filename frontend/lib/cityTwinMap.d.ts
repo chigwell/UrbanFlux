@@ -108,6 +108,7 @@ export interface CityTwinImpact {
   metrics?: CityTwinImpactMetric[];
   note?: string;
   calculationEngine?: "nemotron" | "deterministic_fallback" | string;
+  calculationReason?: string;
 }
 
 export interface CityTwinOptions {
