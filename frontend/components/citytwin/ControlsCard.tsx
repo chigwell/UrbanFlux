@@ -49,22 +49,22 @@ export function ControlsCard({
   onFit,
 }: ControlsCardProps) {
   return (
-    <CollapsiblePanel title="Urban controls" meta="scenario">
-      <div className="flex flex-col gap-5">
+    <CollapsiblePanel title="Urban controls" meta="Scenario">
+      <div className="flex flex-col gap-4">
         <div className="grid grid-cols-2 gap-2">
-          <Button size="sm" onClick={onDemo}>
-            <MapPinnedIcon data-icon="inline-start" />
+          <Button size="sm" onClick={onDemo} className="rounded-none p-4">
+            <MapPinnedIcon data-icon="inline-start"  />
             Demo
           </Button>
-          <Button size="sm" variant="outline" onClick={onUndo}>
+          <Button size="sm" variant="outline" onClick={onUndo} className="rounded-none p-4">
             <Undo2Icon data-icon="inline-start" />
             Undo
           </Button>
-          <Button size="sm" variant="outline" onClick={onClear}>
+          <Button size="sm" variant="outline" onClick={onClear} className="rounded-none p-4">
             <Trash2Icon data-icon="inline-start" />
             Clear
           </Button>
-          <Button size="sm" variant="outline" onClick={onFit}>
+          <Button size="sm" variant="outline" onClick={onFit} className="rounded-none p-4">
             <RotateCcwIcon data-icon="inline-start" />
             Refit
           </Button>

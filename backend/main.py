@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import urllib.request
 import urllib.parse
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from shapely.geometry import shape
 from shapely.ops import unary_union
+
+_BACKEND_DIR = Path(__file__).resolve().parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
+from borough_data import build_borough_data_test_response
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -29,6 +37,10 @@ tags_metadata = [
     {
         "name": "impact",
         "description": "Illustrative replanning impact calculations for selected areas and UI parameters.",
+    },
+    {
+        "name": "borough-data",
+        "description": "Test endpoints for mapped London borough datasets by coordinates.",
     },
 ]
 
@@ -298,6 +310,56 @@ class ImpactResponse(BaseModel):
     }
 
 
+class BoroughDataTestResponse(BaseModel):
+    coordinates: dict[str, float] = Field(..., description="Input WGS84 coordinates.")
+    borough: dict[str, Any] | None = Field(None, description="Resolved London borough for the coordinates.")
+    summary_by_theme: list[dict[str, Any]] = Field(..., description="Row and CSV counts grouped by theme.")
+    top_datasets: list[dict[str, Any]] = Field(..., description="Top datasets for the resolved borough.")
+    latest_rows_by_theme: list[dict[str, Any]] = Field(
+        ...,
+        description="Most recent available source row preview for each returned theme.",
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "coordinates": {"lat": 51.5074, "lon": -0.1278},
+                    "borough": {"name": "Westminster", "code": "E09000033"},
+                    "summary_by_theme": [
+                        {
+                            "theme": "housing",
+                            "row_count": 1234,
+                            "csv_file_count": 12,
+                            "min_date_start": "2018-01-01",
+                            "max_date_end": "2024-12-31",
+                        }
+                    ],
+                    "top_datasets": [
+                        {
+                            "theme": "housing",
+                            "row_count": 200,
+                            "dataset_title": "Example dataset",
+                            "resource_title": "Example resource",
+                        }
+                    ],
+                    "latest_rows_by_theme": [
+                        {
+                            "theme": "housing",
+                            "dataset_title": "Example dataset",
+                            "resource_title": "Example resource",
+                            "row_number": 42,
+                            "date_start": "2024-01-01",
+                            "date_end": "2024-12-31",
+                            "source_row_preview": "key: value",
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -526,3 +588,37 @@ def get_impact(request: ImpactRequest) -> ImpactResponse:
         area_km2=round(area, 4),
         metrics=metrics,
     )
+
+
+@app.get(
+    "/borough-data-test",
+    tags=["borough-data"],
+    summary="Test borough mapped data by coordinates",
+    description=(
+        "Resolves a London borough from WGS84 latitude/longitude and returns the same mapped-data "
+        "summary used by `backend/data_sources/test.py`: summary by theme, top datasets, and a "
+        "latest-row preview for each theme."
+    ),
+    response_model=BoroughDataTestResponse,
+    responses={
+        422: {"description": "Invalid coordinates or query parameters."},
+        503: {"description": "Mapped data package unavailable or failed to load."},
+    },
+)
+def get_borough_data_test(
+    lat: float = Query(..., ge=49.0, le=61.0, description="WGS84 latitude."),
+    lon: float = Query(..., ge=-8.0, le=2.0, description="WGS84 longitude."),
+    top_datasets_limit: int = Query(5, ge=1, le=30, description="Number of top datasets to return."),
+    theme: str | None = Query(None, description="Optional single theme for latest-row lookup."),
+) -> BoroughDataTestResponse:
+    try:
+        payload = build_borough_data_test_response(
+            lat=lat,
+            lon=lon,
+            top_datasets_limit=top_datasets_limit,
+            theme=theme,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return BoroughDataTestResponse(**payload)
