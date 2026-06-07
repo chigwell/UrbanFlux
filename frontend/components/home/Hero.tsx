@@ -2,6 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { ArrowRightIcon, StarIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { HeroMap } from "./HeroMap";
 
 export function Hero() {
   return (
@@ -68,6 +69,7 @@ export function Hero() {
               priority
               unoptimized
             />
+            <HeroMap />
             <div className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-white/10" />
           </div>
         </div>
