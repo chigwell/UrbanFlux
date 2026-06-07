@@ -393,6 +393,34 @@ def _validate_metric_sources(metrics: list[ImpactMetric], allowed_sources: set[s
     ]
 
 
+def _metric_key(metric: ImpactMetric) -> str:
+    return " ".join(metric.improved_metric.casefold().split())
+
+
+def _merge_refined_with_london_metrics(
+    refined_metrics: list[ImpactMetric],
+    london_metrics: list[ImpactMetric],
+) -> list[ImpactMetric]:
+    merged: list[ImpactMetric] = []
+    seen: set[str] = set()
+
+    for metric in refined_metrics:
+        key = _metric_key(metric)
+        if not key or key in seen:
+            continue
+        merged.append(metric)
+        seen.add(key)
+
+    for metric in london_metrics:
+        key = _metric_key(metric)
+        if not key or key in seen:
+            continue
+        merged.append(metric)
+        seen.add(key)
+
+    return merged
+
+
 def _source_catalogue_text(allowed_sources: set[str]) -> str:
     if not allowed_sources:
         return "(none)"
@@ -522,6 +550,7 @@ Return the refined JSON array of impact metrics."""
 
     if nemotron_metrics:
         nemotron_metrics = _validate_metric_sources(nemotron_metrics, allowed_sources)
+        nemotron_metrics = _merge_refined_with_london_metrics(nemotron_metrics, london_metrics)
         used_fallback_llm = calculation_reason.startswith("fallback_llm_refinement_succeeded")
         if used_fallback_llm:
             note = (

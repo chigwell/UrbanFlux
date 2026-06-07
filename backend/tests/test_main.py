@@ -639,6 +639,63 @@ def test_nemotron_impact_metrics_reports_fallback_llm_engine(monkeypatch) -> Non
     assert calculation_reason == "fallback_llm_refinement_succeeded:after:nemotron_call_failed:RuntimeError"
 
 
+def test_nemotron_impact_metrics_merges_missing_deterministic_metrics(monkeypatch) -> None:
+    allowed_source = "https://data.london.gov.uk/dataset/example/"
+    london_metrics = [
+        main.ImpactMetric(
+            improved_metric="Housing capacity",
+            improved_value="+1%",
+            delta="+1% vs baseline",
+            source=allowed_source,
+        ),
+        main.ImpactMetric(
+            improved_metric="Cycling mode share",
+            improved_value="+2 percentage points",
+            delta="+2pp vs baseline",
+            source=allowed_source,
+        ),
+    ]
+    monkeypatch.setattr(
+        main,
+        "_call_nemotron",
+        lambda prompt: (
+            [
+                main.ImpactMetric(
+                    improved_metric="Housing capacity",
+                    improved_value="+4%",
+                    delta="+4% vs baseline",
+                    source=allowed_source,
+                ),
+                main.ImpactMetric(
+                    improved_metric=" housing   capacity ",
+                    improved_value="+5%",
+                    delta="+5% vs baseline",
+                    source=allowed_source,
+                ),
+            ],
+            "fallback_llm_refinement_succeeded:after:nemotron_call_failed:RuntimeError",
+        ),
+    )
+
+    metrics, _note, calculation_engine, _calculation_reason = main._nemotron_impact_metrics(
+        population=2480,
+        area_km2=0.42,
+        params=main.ReplanningParams(),
+        london_metrics=london_metrics,
+        borough_name="Westminster",
+        borough_rows="Borough: Westminster",
+        borough_sources={allowed_source},
+    )
+
+    assert calculation_engine == "fallback_llm"
+    assert [metric.improved_metric for metric in metrics] == [
+        "Housing capacity",
+        "Cycling mode share",
+    ]
+    assert metrics[0].improved_value == "+4%"
+    assert metrics[1].improved_value == "+2 percentage points"
+
+
 def test_latest_theme_row_includes_source_links() -> None:
     row = {
         "row_number": 42,
