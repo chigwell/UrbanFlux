@@ -46,7 +46,7 @@ interface AnalyticsScreenProps {
 // Theme-aware so bars flip with light/dark; values resolve from globals.css.
 const SIGN_COLOR: Record<ReturnType<typeof metricSign>, string> = {
   positive: "var(--uf-positive)",
-  negative: "var(--destructive)",
+  negative: "var(--uf-positive)",
   neutral: "var(--muted-foreground)",
 };
 
@@ -73,7 +73,11 @@ function toChartRows(metrics: CityTwinImpactMetric[]): ChartRow[] {
 }
 
 function ImpactChart({ impact }: { impact: CityTwinImpact | null }) {
-  if (impactMessage(impact) || impact?.status !== "ready" || !impact.metrics?.length) {
+  if (
+    impactMessage(impact) ||
+    impact?.status !== "ready" ||
+    !impact.metrics?.length
+  ) {
     return null;
   }
 
@@ -145,7 +149,11 @@ export function AnalyticsScreen({
   layoutId,
 }: AnalyticsScreenProps) {
   return (
-    <ExpandableScreen layoutId={layoutId} triggerRadius="2px" contentRadius="16px">
+    <ExpandableScreen
+      layoutId={layoutId}
+      triggerRadius="2px"
+      contentRadius="16px"
+    >
       <ExpandableScreenTrigger className="w-full">
         <div className="flex w-full min-h-11 min-w-0 items-center justify-between gap-3 overflow-hidden border-[0.5px] bg-card px-4 py-3 text-left shadow-xs transition-colors hover:bg-muted">
           <span className="text-sm font-medium">Impact dashboard</span>
