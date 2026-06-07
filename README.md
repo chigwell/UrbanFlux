@@ -13,8 +13,11 @@ UrbanFlux is a Next.js CityTwin map frontend with a FastAPI backend.
 
 ## Live URLs
 
+> [!WARNING]
+> The hosted backend at `https://api.urbanflux.london/` was turned off after the hackathon, so API-backed features may be unavailable unless you run the backend locally.
+
 - Frontend: https://urbanflux.london/
-- API: https://api.urbanflux.london/
+- API: https://api.urbanflux.london/ 
 - Cloudflare Pages fallback: https://urbanflux.pages.dev/
 
 ## Borough assignment model
@@ -61,7 +64,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 Pushes to `main` run `.github/workflows/deploy.yml`.
 
 - Frontend deploys to Cloudflare Pages project `urbanflux`.
-- Backend deploys to the VPS at `161.97.187.158:/opt/urbanflux/backend`.
+- Backend deploys to the VPS at `:/opt/urbanflux/backend`.
 
 Detailed notes:
 

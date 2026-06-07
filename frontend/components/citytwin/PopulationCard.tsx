@@ -10,6 +10,8 @@ interface PopulationCardProps {
 
 const BASELINE_HEIGHT_AMBITION = 58;
 const SKYSCRAPER_THRESHOLD = 88;
+const BACKEND_OFF_WARNING =
+  "The hosted backend at api.urbanflux.london was turned off after the hackathon. Run the backend locally for API-backed estimates, or email hi@eugene.plus with questions.";
 
 function parsePopulation(value: string | undefined): number | null {
   if (!value) {
@@ -86,8 +88,7 @@ export function PopulationCard({
         </p>
       ) : population.status === "error" ? (
         <p className="text-sm leading-relaxed text-muted-foreground">
-          Population estimate is unavailable right now. Reshape the zone to try
-          again.
+          {BACKEND_OFF_WARNING}
         </p>
       ) : (
         <div className="flex flex-col gap-3">

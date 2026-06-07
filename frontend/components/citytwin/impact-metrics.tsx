@@ -9,6 +9,8 @@ import type {
 import { cn } from "@/lib/utils";
 
 const DASH = "—";
+const BACKEND_OFF_WARNING =
+  "The hosted backend at api.urbanflux.london was turned off after the hackathon. Run the backend locally for API-backed impact estimates, or email hi@eugene.plus with questions.";
 
 /** The six basic scenario tiles shared between the card and the analytics screen. */
 export function metricTiles(
@@ -78,7 +80,7 @@ export function impactMessage(impact: CityTwinImpact | null): string | null {
   }
   return impact.status === "loading"
     ? "loading"
-    : "Impact estimate unavailable. Adjust the controls to try again.";
+    : BACKEND_OFF_WARNING;
 }
 
 function ImpactPreloader() {

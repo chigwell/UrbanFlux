@@ -4,6 +4,9 @@ FastAPI backend for UrbanFlux CityTwin.
 
 Production API URL: `https://api.urbanflux.london/`
 
+> [!WARNING]
+> The hosted backend at `https://api.urbanflux.london/` was turned off after the hackathon. Run this backend locally if you need API functionality.
+
 ## API Surface
 
 - `GET /` -> `{"message": "UrbanFlux backend is running"}`
