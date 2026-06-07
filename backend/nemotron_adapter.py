@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from pathlib import Path
 from typing import Callable
 
+import httpx
+
 from impact import _normalise_source_url
 from schemas import ImpactMetric, ReplanningParams
 
@@ -46,30 +48,56 @@ Example output format:
 ]"""
 
 
-_NEMOTRON_TIMEOUT_S = 12
+_DEFAULT_IMPACT_LLM_TIMEOUT_S = 20
 _ENV_FILE = Path(__file__).resolve().with_name(".env")
 _NEMOTRON_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
 _FAL_APP = "openrouter/router"
+_FALLBACK_LLM_MODEL_ENV = "FALLBACK_LLM_PROVIDER_MODEL"
+_FALLBACK_LLM_TOKEN_ENV = "FALLBACK_LLM_PROVIDER_TOKEN"
+_FALLBACK_LLM_URL_ENV = "FALLBACK_LLM_PROVIDER_URL"
 _LOGGER = logging.getLogger("urbanflux.nemotron")
 
 
-def _get_fal_key_with_source() -> tuple[str, str]:
-    fal_key = os.getenv("FAL_KEY", "").strip()
-    if fal_key:
-        return fal_key, "environment"
+def _impact_llm_timeout_s() -> float:
+    value = os.getenv("IMPACT_LLM_TIMEOUT_S", "").strip() or _env_file_value("IMPACT_LLM_TIMEOUT_S")
+    if not value:
+        return _DEFAULT_IMPACT_LLM_TIMEOUT_S
+    try:
+        timeout = float(value)
+    except ValueError:
+        return _DEFAULT_IMPACT_LLM_TIMEOUT_S
+    return max(1.0, timeout)
 
+
+def _env_file_value(name: str) -> str:
     try:
         for line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
             stripped = line.strip()
             if not stripped or stripped.startswith("#") or "=" not in stripped:
                 continue
             key, value = stripped.split("=", 1)
-            if key.strip() == "FAL_KEY":
-                return value.strip().strip("'\""), f"env_file:{_ENV_FILE}"
+            if key.strip() == name:
+                return value.strip().strip("'\"")
     except OSError:
-        return "", "missing"
+        return ""
+
+    return ""
+
+
+def _get_env_with_source(name: str) -> tuple[str, str]:
+    value = os.getenv(name, "").strip()
+    if value:
+        return value, "environment"
+
+    value = _env_file_value(name)
+    if value:
+        return value, f"env_file:{_ENV_FILE}"
 
     return "", "missing"
+
+
+def _get_fal_key_with_source() -> tuple[str, str]:
+    return _get_env_with_source("FAL_KEY")
 
 
 def _get_fal_key() -> str:
@@ -98,6 +126,257 @@ def _log_nemotron_attempt(
         event,
         _json_preview(details),
     )
+
+
+def _metrics_from_raw_response(
+    raw: str,
+    attempt_id: str,
+    provider: str,
+    started_at: float,
+) -> tuple[list[ImpactMetric] | None, str]:
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            _log_nemotron_attempt(
+                attempt_id,
+                "fallback",
+                provider=provider,
+                reason=f"{provider}_invalid_metric_json",
+                raw_chars=len(raw),
+                raw_preview=raw,
+                parsed_type=type(parsed).__name__,
+            )
+            return None, f"{provider}_invalid_metric_json"
+        metrics = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            metrics.append(
+                ImpactMetric(
+                    improved_metric=str(item.get("improved_metric", "")),
+                    improved_value=str(item.get("improved_value", "")),
+                    delta=str(item.get("delta", "")),
+                    source=str(item.get("source", "")),
+                    methodology_source=str(item.get("methodology_source", "")),
+                    basis=str(item.get("basis", "")),
+                )
+            )
+        if not metrics:
+            _log_nemotron_attempt(
+                attempt_id,
+                "fallback",
+                provider=provider,
+                reason=f"{provider}_invalid_metric_json",
+                raw_chars=len(raw),
+                raw_preview=raw,
+                parsed_items=len(parsed),
+                valid_metrics=0,
+            )
+            return None, f"{provider}_invalid_metric_json"
+        _log_nemotron_attempt(
+            attempt_id,
+            "success",
+            provider=provider,
+            elapsed_s=round(time.monotonic() - started_at, 3),
+            raw_chars=len(raw),
+            raw_preview=raw,
+            parsed_items=len(parsed),
+            valid_metrics=len(metrics),
+            metric_names=[metric.improved_metric for metric in metrics],
+        )
+        return metrics, f"{provider}_refinement_succeeded"
+    except Exception:
+        _LOGGER.exception(
+            "Nemotron impact attempt %s %s response parse failed after %.3fs; raw preview: %s",
+            attempt_id,
+            provider,
+            time.monotonic() - started_at,
+            raw[:4000],
+        )
+        return None, f"{provider}_invalid_metric_json"
+
+
+def _call_fal_nemotron(prompt: str, attempt_id: str, started_at: float) -> tuple[list[ImpactMetric] | None, str]:
+    fal_key, fal_key_source = _get_fal_key_with_source()
+    _log_nemotron_attempt(
+        attempt_id,
+        "fal_start",
+        fal_key_present=bool(fal_key),
+        fal_key_source=fal_key_source,
+        env_file=str(_ENV_FILE),
+        env_file_exists=_ENV_FILE.exists(),
+        app=_FAL_APP,
+        model=_NEMOTRON_MODEL,
+        system_prompt_chars=len(NEMOTRON_IMPACT_SYSTEM_PROMPT),
+        prompt_chars=len(prompt),
+    )
+    if not fal_key:
+        _log_nemotron_attempt(attempt_id, "fal_failed", reason="fal_key_missing")
+        return None, "fal_key_missing"
+
+    if not os.getenv("FAL_KEY"):
+        os.environ["FAL_KEY"] = fal_key
+        _log_nemotron_attempt(
+            attempt_id,
+            "loaded_fal_key_into_process_environment",
+            source=fal_key_source,
+        )
+
+    try:
+        import fal_client
+    except ImportError:
+        _log_nemotron_attempt(attempt_id, "fal_failed", reason="fal_client_unavailable")
+        return None, "fal_client_unavailable"
+
+    _log_nemotron_attempt(
+        attempt_id,
+        "fal_request",
+        app=_FAL_APP,
+        model=_NEMOTRON_MODEL,
+        with_logs=False,
+        system_prompt=NEMOTRON_IMPACT_SYSTEM_PROMPT,
+        prompt=prompt,
+    )
+    try:
+        result = fal_client.subscribe(
+            _FAL_APP,
+            arguments={
+                "model": _NEMOTRON_MODEL,
+                "system_prompt": NEMOTRON_IMPACT_SYSTEM_PROMPT,
+                "prompt": prompt,
+            },
+            with_logs=False,
+        )
+    except Exception as exc:
+        _LOGGER.exception(
+            "Nemotron impact attempt %s FAL call failed after %.3fs",
+            attempt_id,
+            time.monotonic() - started_at,
+        )
+        return None, f"nemotron_call_failed:{type(exc).__name__}"
+
+    _log_nemotron_attempt(
+        attempt_id,
+        "fal_response",
+        elapsed_s=round(time.monotonic() - started_at, 3),
+        result_type=type(result).__name__,
+        result_keys=sorted(result.keys()) if isinstance(result, dict) else [],
+        result_preview=result,
+    )
+
+    raw = (
+        result.get("output")
+        or result.get("text")
+        or (result.get("choices") or [{}])[0].get("message", {}).get("content")
+        or ""
+    )
+    return _metrics_from_raw_response(raw, attempt_id, "nemotron", started_at)
+
+
+def _fallback_chat_completions_url(url: str) -> str:
+    clean_url = url.rstrip("/")
+    if clean_url.endswith("/chat/completions"):
+        return clean_url
+    return f"{clean_url}/chat/completions"
+
+
+def _fallback_llm_config() -> tuple[str, str, str, str, str, str]:
+    url, url_source = _get_env_with_source(_FALLBACK_LLM_URL_ENV)
+    token, token_source = _get_env_with_source(_FALLBACK_LLM_TOKEN_ENV)
+    model, model_source = _get_env_with_source(_FALLBACK_LLM_MODEL_ENV)
+    return url, token, model or _NEMOTRON_MODEL, url_source, token_source, model_source or "default"
+
+
+def _call_fallback_llm(
+    prompt: str,
+    attempt_id: str,
+    started_at: float,
+    primary_reason: str,
+) -> tuple[list[ImpactMetric] | None, str]:
+    url, token, model, url_source, token_source, model_source = _fallback_llm_config()
+    chat_completions_url = _fallback_chat_completions_url(url) if url else ""
+    _log_nemotron_attempt(
+        attempt_id,
+        "fallback_llm_start",
+        url_present=bool(url),
+        token_present=bool(token),
+        url_source=url_source,
+        token_source=token_source,
+        model_source=model_source,
+        model=model,
+        primary_reason=primary_reason,
+    )
+    if not url or not token:
+        missing = []
+        if not url:
+            missing.append(_FALLBACK_LLM_URL_ENV)
+        if not token:
+            missing.append(_FALLBACK_LLM_TOKEN_ENV)
+        reason = f"fallback_llm_config_missing:{','.join(missing)}:after:{primary_reason}"
+        _log_nemotron_attempt(attempt_id, "fallback_llm_failed", reason=reason)
+        return None, reason
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": NEMOTRON_IMPACT_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0,
+    }
+    _log_nemotron_attempt(
+        attempt_id,
+        "fallback_llm_request",
+        url=chat_completions_url,
+        model=model,
+        payload=payload,
+        primary_reason=primary_reason,
+    )
+    try:
+        response = httpx.post(
+            chat_completions_url,
+            headers={
+                "authorization": f"Bearer {token}",
+                "content-type": "application/json",
+            },
+            json=payload,
+            timeout=_impact_llm_timeout_s(),
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        _LOGGER.exception(
+            "Nemotron impact attempt %s fallback LLM call failed after %.3fs",
+            attempt_id,
+            time.monotonic() - started_at,
+        )
+        return None, f"fallback_llm_call_failed:{type(exc).__name__}:after:{primary_reason}"
+
+    try:
+        result = response.json()
+    except Exception:
+        result = {"raw_text": response.text}
+
+    _log_nemotron_attempt(
+        attempt_id,
+        "fallback_llm_response",
+        elapsed_s=round(time.monotonic() - started_at, 3),
+        status_code=response.status_code,
+        result_type=type(result).__name__,
+        result_keys=sorted(result.keys()) if isinstance(result, dict) else [],
+        result_preview=result,
+    )
+
+    raw = (
+        result.get("output")
+        or result.get("text")
+        or (result.get("choices") or [{}])[0].get("message", {}).get("content")
+        or result.get("raw_text")
+        or ""
+    )
+    metrics, reason = _metrics_from_raw_response(raw, attempt_id, "fallback_llm", started_at)
+    if metrics:
+        return metrics, f"{reason}:after:{primary_reason}"
+    return None, f"{reason}:after:{primary_reason}"
 
 
 def _validate_metric_sources(metrics: list[ImpactMetric], allowed_sources: set[str]) -> list[ImpactMetric]:
@@ -138,136 +417,27 @@ def _call_nemotron(prompt: str) -> tuple[list[ImpactMetric] | None, str]:
     """
     attempt_id = uuid.uuid4().hex[:8]
     started_at = time.monotonic()
-    fal_key, fal_key_source = _get_fal_key_with_source()
     _log_nemotron_attempt(
         attempt_id,
         "start",
-        fal_key_present=bool(fal_key),
-        fal_key_source=fal_key_source,
         env_file=str(_ENV_FILE),
         env_file_exists=_ENV_FILE.exists(),
-        app=_FAL_APP,
-        model=_NEMOTRON_MODEL,
+        primary_app=_FAL_APP,
+        primary_model=_NEMOTRON_MODEL,
         system_prompt_chars=len(NEMOTRON_IMPACT_SYSTEM_PROMPT),
         prompt_chars=len(prompt),
     )
-    if not fal_key:
-        _log_nemotron_attempt(attempt_id, "fallback", reason="fal_key_missing")
-        return None, "fal_key_missing"
 
-    if not os.getenv("FAL_KEY"):
-        os.environ["FAL_KEY"] = fal_key
-        _log_nemotron_attempt(
-            attempt_id,
-            "loaded_fal_key_into_process_environment",
-            source=fal_key_source,
-        )
-
-    try:
-        import fal_client
-    except ImportError:
-        _log_nemotron_attempt(attempt_id, "fallback", reason="fal_client_unavailable")
-        return None, "fal_client_unavailable"
+    metrics, primary_reason = _call_fal_nemotron(prompt, attempt_id, started_at)
+    if metrics:
+        return metrics, primary_reason
 
     _log_nemotron_attempt(
         attempt_id,
-        "request",
-        app=_FAL_APP,
-        model=_NEMOTRON_MODEL,
-        with_logs=False,
-        system_prompt=NEMOTRON_IMPACT_SYSTEM_PROMPT,
-        prompt=prompt,
+        "primary_provider_failed_trying_fallback_llm",
+        primary_reason=primary_reason,
     )
-    try:
-        result = fal_client.subscribe(
-            _FAL_APP,
-            arguments={
-                "model": _NEMOTRON_MODEL,
-                "system_prompt": NEMOTRON_IMPACT_SYSTEM_PROMPT,
-                "prompt": prompt,
-            },
-            with_logs=False,
-        )
-    except Exception as exc:
-        _LOGGER.exception(
-            "Nemotron impact attempt %s call failed after %.3fs",
-            attempt_id,
-            time.monotonic() - started_at,
-        )
-        return None, f"nemotron_call_failed:{type(exc).__name__}"
-
-    _log_nemotron_attempt(
-        attempt_id,
-        "response",
-        elapsed_s=round(time.monotonic() - started_at, 3),
-        result_type=type(result).__name__,
-        result_keys=sorted(result.keys()) if isinstance(result, dict) else [],
-        result_preview=result,
-    )
-
-    raw = (
-        result.get("output")
-        or result.get("text")
-        or (result.get("choices") or [{}])[0].get("message", {}).get("content")
-        or ""
-    )
-
-    try:
-        parsed = json.loads(raw)
-        if not isinstance(parsed, list):
-            _log_nemotron_attempt(
-                attempt_id,
-                "fallback",
-                reason="invalid_metric_json",
-                raw_chars=len(raw),
-                raw_preview=raw,
-                parsed_type=type(parsed).__name__,
-            )
-            return None, "invalid_metric_json"
-        metrics = []
-        for item in parsed:
-            if not isinstance(item, dict):
-                continue
-            metrics.append(
-                ImpactMetric(
-                    improved_metric=str(item.get("improved_metric", "")),
-                    improved_value=str(item.get("improved_value", "")),
-                    delta=str(item.get("delta", "")),
-                    source=str(item.get("source", "")),
-                    methodology_source=str(item.get("methodology_source", "")),
-                    basis=str(item.get("basis", "")),
-                )
-            )
-        if not metrics:
-            _log_nemotron_attempt(
-                attempt_id,
-                "fallback",
-                reason="invalid_metric_json",
-                raw_chars=len(raw),
-                raw_preview=raw,
-                parsed_items=len(parsed),
-                valid_metrics=0,
-            )
-            return None, "invalid_metric_json"
-        _log_nemotron_attempt(
-            attempt_id,
-            "success",
-            elapsed_s=round(time.monotonic() - started_at, 3),
-            raw_chars=len(raw),
-            raw_preview=raw,
-            parsed_items=len(parsed),
-            valid_metrics=len(metrics),
-            metric_names=[metric.improved_metric for metric in metrics],
-        )
-        return metrics, "nemotron_refinement_succeeded"
-    except Exception as exc:
-        _LOGGER.exception(
-            "Nemotron impact attempt %s response parse failed after %.3fs; raw preview: %s",
-            attempt_id,
-            time.monotonic() - started_at,
-            raw[:4000],
-        )
-        return None, "invalid_metric_json"
+    return _call_fallback_llm(prompt, attempt_id, started_at, primary_reason)
 
 
 def _nemotron_impact_metrics(
@@ -331,13 +501,14 @@ Return the refined JSON array of impact metrics."""
     executor = ThreadPoolExecutor(max_workers=1)
     future = executor.submit(call_nemotron, prompt)
     try:
-        nemotron_metrics, calculation_reason = future.result(timeout=_NEMOTRON_TIMEOUT_S)
+        timeout_s = _impact_llm_timeout_s()
+        nemotron_metrics, calculation_reason = future.result(timeout=timeout_s)
     except FuturesTimeoutError:
         nemotron_metrics = None
         calculation_reason = "nemotron_timeout"
         _LOGGER.warning(
             "Nemotron impact refinement timed out after %ss for borough=%s",
-            _NEMOTRON_TIMEOUT_S,
+            _impact_llm_timeout_s(),
             borough_name or "unknown",
         )
         executor.shutdown(wait=False, cancel_futures=True)
@@ -351,17 +522,28 @@ Return the refined JSON array of impact metrics."""
 
     if nemotron_metrics:
         nemotron_metrics = _validate_metric_sources(nemotron_metrics, allowed_sources)
-        note = (
-            f"Refined by Nvidia Nemotron using real {borough_name} data"
-            if borough_name
-            else "Refined by Nvidia Nemotron using London Datastore data"
-        )
+        used_fallback_llm = calculation_reason.startswith("fallback_llm_refinement_succeeded")
+        if used_fallback_llm:
+            note = (
+                f"Refined by fallback LLM provider using real {borough_name} data"
+                if borough_name
+                else "Refined by fallback LLM provider using London Datastore data"
+            )
+            engine = "fallback_llm"
+        else:
+            note = (
+                f"Refined by Nvidia Nemotron using real {borough_name} data"
+                if borough_name
+                else "Refined by Nvidia Nemotron using London Datastore data"
+            )
+            engine = "nemotron"
         _LOGGER.info(
-            "Nemotron impact refinement selected engine=nemotron reason=%s metrics=%s",
+            "Nemotron impact refinement selected engine=%s reason=%s metrics=%s",
+            engine,
             calculation_reason,
             len(nemotron_metrics),
         )
-        return nemotron_metrics, note, "nemotron", calculation_reason
+        return nemotron_metrics, note, engine, calculation_reason
 
     has_london_sources = any(_normalise_source_url(metric.source) for metric in london_metrics)
     if borough_name and has_london_sources:

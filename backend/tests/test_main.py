@@ -128,7 +128,10 @@ def test_impact_endpoint_returns_replanning_metrics(monkeypatch) -> None:
     assert "Mapped Westminster transport row" in payload["metrics"][0]["basis"]
     assert payload["note"] == "London Datastore mapped estimates for Westminster"
     assert payload["calculation_engine"] == "deterministic_fallback"
-    assert payload["calculation_reason"] == "fal_key_missing"
+    assert payload["calculation_reason"] == (
+        "fallback_llm_config_missing:FALLBACK_LLM_PROVIDER_URL,"
+        "FALLBACK_LLM_PROVIDER_TOKEN:after:fal_key_missing"
+    )
 
 
 def test_default_heat_metric_is_local_and_capped() -> None:
@@ -347,12 +350,17 @@ def test_fetch_borough_context_handles_missing_borough(monkeypatch) -> None:
 
 def test_call_nemotron_returns_none_without_fal_key(monkeypatch) -> None:
     monkeypatch.delenv("FAL_KEY", raising=False)
+    monkeypatch.delenv("FALLBACK_LLM_PROVIDER_URL", raising=False)
+    monkeypatch.delenv("FALLBACK_LLM_PROVIDER_TOKEN", raising=False)
     monkeypatch.setattr(nemotron_adapter, "_ENV_FILE", Path("/tmp/urbanflux-missing.env"))
 
     metrics, reason = main._call_nemotron("prompt")
 
     assert metrics is None
-    assert reason == "fal_key_missing"
+    assert reason == (
+        "fallback_llm_config_missing:FALLBACK_LLM_PROVIDER_URL,"
+        "FALLBACK_LLM_PROVIDER_TOKEN:after:fal_key_missing"
+    )
 
 
 def test_call_nemotron_reads_fal_key_from_env_file(monkeypatch, tmp_path) -> None:
@@ -426,6 +434,8 @@ def test_call_nemotron_parses_valid_json(monkeypatch) -> None:
 
 def test_call_nemotron_returns_none_for_invalid_json(monkeypatch) -> None:
     monkeypatch.setenv("FAL_KEY", "test-key")
+    monkeypatch.delenv("FALLBACK_LLM_PROVIDER_URL", raising=False)
+    monkeypatch.delenv("FALLBACK_LLM_PROVIDER_TOKEN", raising=False)
     monkeypatch.setitem(
         sys.modules,
         "fal_client",
@@ -435,7 +445,78 @@ def test_call_nemotron_returns_none_for_invalid_json(monkeypatch) -> None:
     metrics, reason = main._call_nemotron("prompt")
 
     assert metrics is None
-    assert reason == "invalid_metric_json"
+    assert reason == (
+        "fallback_llm_config_missing:FALLBACK_LLM_PROVIDER_URL,"
+        "FALLBACK_LLM_PROVIDER_TOKEN:after:nemotron_invalid_metric_json"
+    )
+
+
+def test_call_nemotron_uses_fallback_llm_after_fal_failure(monkeypatch) -> None:
+    source = "https://data.london.gov.uk/dataset/example/"
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    monkeypatch.setenv("FALLBACK_LLM_PROVIDER_URL", "https://fallback.example/v1")
+    monkeypatch.setenv("FALLBACK_LLM_PROVIDER_TOKEN", "fallback-token")
+    monkeypatch.setenv("FALLBACK_LLM_PROVIDER_MODEL", "fallback-model")
+    monkeypatch.setitem(
+        sys.modules,
+        "fal_client",
+        types.SimpleNamespace(
+            subscribe=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("fal down"))
+        ),
+    )
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                [
+                                    {
+                                        "improved_metric": "Housing capacity",
+                                        "improved_value": "+3%",
+                                        "delta": "+3% vs baseline",
+                                        "source": source,
+                                        "methodology_source": "",
+                                        "basis": "Fallback mapped data",
+                                    }
+                                ]
+                            )
+                        }
+                    }
+                ]
+            }
+
+    calls = []
+
+    def fake_post(url, headers, json, timeout):
+        calls.append(
+            {
+                "url": url,
+                "headers": headers,
+                "json": json,
+                "timeout": timeout,
+            }
+        )
+        return FakeResponse()
+
+    monkeypatch.setattr(nemotron_adapter.httpx, "post", fake_post)
+
+    metrics, reason = main._call_nemotron("prompt")
+
+    assert metrics is not None
+    assert metrics[0].improved_metric == "Housing capacity"
+    assert reason == "fallback_llm_refinement_succeeded:after:nemotron_call_failed:RuntimeError"
+    assert calls[0]["url"] == "https://fallback.example/v1/chat/completions"
+    assert calls[0]["headers"]["authorization"] == "Bearer fallback-token"
+    assert calls[0]["json"]["model"] == "fallback-model"
 
 
 def test_nemotron_impact_metrics_falls_back_when_unavailable(monkeypatch) -> None:
@@ -514,6 +595,48 @@ def test_nemotron_impact_metrics_blanks_unallowed_refined_sources(monkeypatch) -
     assert calculation_reason == "nemotron_refinement_succeeded"
     assert metrics[0].source == allowed_source
     assert metrics[1].source == ""
+
+
+def test_nemotron_impact_metrics_reports_fallback_llm_engine(monkeypatch) -> None:
+    allowed_source = "https://data.london.gov.uk/dataset/example/"
+    london_metrics = [
+        main.ImpactMetric(
+            improved_metric="Housing capacity",
+            improved_value="+1%",
+            delta="+1% vs baseline",
+            source=allowed_source,
+        )
+    ]
+    monkeypatch.setattr(
+        main,
+        "_call_nemotron",
+        lambda prompt: (
+            [
+                main.ImpactMetric(
+                    improved_metric="Housing capacity",
+                    improved_value="+4%",
+                    delta="+4% vs baseline",
+                    source=allowed_source,
+                )
+            ],
+            "fallback_llm_refinement_succeeded:after:nemotron_call_failed:RuntimeError",
+        ),
+    )
+
+    metrics, note, calculation_engine, calculation_reason = main._nemotron_impact_metrics(
+        population=2480,
+        area_km2=0.42,
+        params=main.ReplanningParams(),
+        london_metrics=london_metrics,
+        borough_name="Westminster",
+        borough_rows="Borough: Westminster",
+        borough_sources={allowed_source},
+    )
+
+    assert metrics[0].improved_value == "+4%"
+    assert note == "Refined by fallback LLM provider using real Westminster data"
+    assert calculation_engine == "fallback_llm"
+    assert calculation_reason == "fallback_llm_refinement_succeeded:after:nemotron_call_failed:RuntimeError"
 
 
 def test_latest_theme_row_includes_source_links() -> None:
