@@ -173,7 +173,7 @@ export function ImpactMetricCards({
             className={cn(
               "border-[0.5px] p-3",
               sign === "positive" && "border-emerald-500/30 bg-emerald-500/10",
-              sign === "negative" && "border-red-500/30 bg-red-500/10",
+              sign === "negative" && "border-emerald-500/30 bg-emerald-500/10",
               sign === "neutral" && "bg-muted/30",
             )}
           >
@@ -186,7 +186,8 @@ export function ImpactMetricCards({
                   "text-sm font-medium tabular-nums",
                   sign === "positive" &&
                     "text-emerald-600 dark:text-emerald-400",
-                  sign === "negative" && "text-red-600 dark:text-red-400",
+                  sign === "negative" &&
+                    "text-emerald-600 dark:text-emerald-400",
                 )}
               >
                 {metric.value}
