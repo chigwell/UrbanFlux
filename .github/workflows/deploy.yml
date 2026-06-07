@@ -1,4 +1,4 @@
-name: Deploy frontend and backend
+name: Deploy frontend
 
 on:
   push:
@@ -9,37 +9,9 @@ permissions:
   contents: read
 
 jobs:
-  test-api:
-    name: Run FastAPI unit tests
-    runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: backend
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: backend/requirements.txt
-
-      - name: Install API dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run API unit tests
-        run: pytest tests
-
   deploy-frontend:
     name: Deploy frontend to Cloudflare Pages
     runs-on: ubuntu-latest
-    needs: test-api
 
     defaults:
       run:
@@ -69,117 +41,3 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: frontend
           command: pages deploy out --project-name=${{ secrets.CLOUDFLARE_PROJECT_NAME }} --branch=main
-
-  deploy-backend:
-    name: Deploy FastAPI backend to VPS
-    runs-on: ubuntu-latest
-    needs: test-api
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          echo "${{ secrets.VPS_SSH_PRIVATE_KEY }}" > ~/.ssh/urbanflux_deploy_key
-          chmod 600 ~/.ssh/urbanflux_deploy_key
-          ssh-keygen -y -f ~/.ssh/urbanflux_deploy_key > ~/.ssh/urbanflux_deploy_key.pub
-          ssh-keygen -lf ~/.ssh/urbanflux_deploy_key.pub
-
-      - name: Upload backend source
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PORT: ${{ secrets.VPS_SSH_PORT || '22' }}
-          FAL_KEY: ${{ secrets.FAL_KEY }}
-        run: |
-          rsync -az --delete \
-            --exclude ".venv" \
-            --exclude "__pycache__" \
-            --exclude ".pytest_cache" \
-            --exclude ".mypy_cache" \
-            --exclude ".git" \
-            --exclude ".env" \
-            --exclude "data_sources/.cache" \
-            --exclude "data_sources/london_mapped_data_package" \
-            -e "ssh -i ~/.ssh/urbanflux_deploy_key -p ${VPS_PORT} -o StrictHostKeyChecking=no -o BatchMode=yes -o IdentitiesOnly=yes" \
-            backend/ \
-            ${VPS_USER}@${VPS_HOST}:/opt/urbanflux/backend/
-
-      - name: Upload backend environment
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PORT: ${{ secrets.VPS_SSH_PORT || '22' }}
-          FAL_KEY: ${{ secrets.FAL_KEY }}
-          FALLBACK_LLM_PROVIDER_URL: ${{ secrets.FALLBACK_LLM_PROVIDER_URL }}
-          FALLBACK_LLM_PROVIDER_TOKEN: ${{ secrets.FALLBACK_LLM_PROVIDER_TOKEN }}
-          FALLBACK_LLM_PROVIDER_MODEL: ${{ secrets.FALLBACK_LLM_PROVIDER_MODEL }}
-        run: |
-          umask 077
-          if [ -z "${FAL_KEY}" ]; then
-            echo "FAL_KEY GitHub secret is empty or unavailable to this workflow." >&2
-            exit 1
-          fi
-
-          {
-            printf 'FAL_KEY=%s\n' "${FAL_KEY}"
-            if [ -n "${FALLBACK_LLM_PROVIDER_URL}" ]; then
-              printf 'FALLBACK_LLM_PROVIDER_URL=%s\n' "${FALLBACK_LLM_PROVIDER_URL}"
-            fi
-            if [ -n "${FALLBACK_LLM_PROVIDER_TOKEN}" ]; then
-              printf 'FALLBACK_LLM_PROVIDER_TOKEN=%s\n' "${FALLBACK_LLM_PROVIDER_TOKEN}"
-            fi
-            if [ -n "${FALLBACK_LLM_PROVIDER_MODEL}" ]; then
-              printf 'FALLBACK_LLM_PROVIDER_MODEL=%s\n' "${FALLBACK_LLM_PROVIDER_MODEL}"
-            fi
-          } > /tmp/urbanflux-backend.env
-
-          scp -i ~/.ssh/urbanflux_deploy_key -P "${VPS_PORT}" \
-            -o StrictHostKeyChecking=no -o BatchMode=yes -o IdentitiesOnly=yes \
-            /tmp/urbanflux-backend.env \
-            ${VPS_USER}@${VPS_HOST}:/opt/urbanflux/backend/.env
-
-      - name: Install dependencies and restart backend service
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PORT: ${{ secrets.VPS_SSH_PORT || '22' }}
-          BACKEND_SERVICE: ${{ secrets.VPS_SERVICE_NAME || 'urbanflux-backend' }}
-          FAL_KEY: ${{ secrets.FAL_KEY }}
-        run: |
-          ssh -i ~/.ssh/urbanflux_deploy_key -p "${VPS_PORT}" -o StrictHostKeyChecking=no \
-            -o BatchMode=yes -o IdentitiesOnly=yes \
-            ${VPS_USER}@${VPS_HOST} "BACKEND_SERVICE=${BACKEND_SERVICE} bash -s" << 'EOF'
-          set -euo pipefail
-          TARGET_DIR="/opt/urbanflux/backend"
-          SERVICE_NAME="${BACKEND_SERVICE}"
-
-          command -v python3 >/dev/null
-          command -v rsync >/dev/null
-
-          cd "${TARGET_DIR}"
-          if [ ! -s ".env" ] || ! grep -q '^FAL_KEY=.' ".env"; then
-            echo "Backend .env is missing FAL_KEY on the VPS." >&2
-            exit 1
-          fi
-
-          if [ ! -f ".venv/bin/activate" ]; then
-            rm -rf .venv
-            python3 -m venv .venv
-          fi
-          . .venv/bin/activate
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-          if [ ! -f "data_sources/london_mapped_data_package/data/london_mapped_compact.sqlite3" ]; then
-            python data_sources/setup_london_mapped_data.py
-          fi
-
-          chmod 600 ".env"
-
-          sudo -n systemctl restart "${SERVICE_NAME}"
-          sudo -n systemctl --no-pager status "${SERVICE_NAME}"
-          EOF

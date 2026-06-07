@@ -40,7 +40,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 pytest tests
 ```
 
-CI runs the same backend test suite on Python 3.12.
+Backend CI is disabled because the hosted backend was turned off after the hackathon.
 
 ## Nemotron Behavior
 
@@ -69,46 +69,21 @@ The `/impact` path tries FAL/OpenRouter first, then this fallback provider, then
 - `nemotron_adapter.py` - optional Nemotron call, JSON parsing, timeout fallback, and source allow-list validation.
 - `borough_data.py` / `utils.py` - mapped London data package endpoint helpers.
 
-## GitHub Actions Deploy (VPS)
+## GitHub Actions Deploy
 
 Workflow file: `.github/workflows/deploy.yml`
 
-Push to `main` uploads `backend/` to:
+The current workflow deploys only the frontend. Backend VPS deployment is disabled because the hosted backend was turned off after the hackathon.
 
-```text
-/opt/urbanflux/backend
-```
+### Local service
 
-The workflow installs Python dependencies on the VPS, ensures the mapped London data package exists, and restarts the `systemd` service.
-
-### Required GitHub secrets
-
-- `VPS_HOST`
-- `VPS_USER`
-- `VPS_SSH_PRIVATE_KEY`
-- `VPS_SSH_PORT`
-- `VPS_SERVICE_NAME`
-- `FAL_KEY` when live Nemotron refinement is enabled
-- `FALLBACK_LLM_PROVIDER_URL` and `FALLBACK_LLM_PROVIDER_TOKEN` when the second LLM fallback is enabled
-- `FALLBACK_LLM_PROVIDER_MODEL` optionally overrides the fallback model name
-- `IMPACT_LLM_TIMEOUT_S` optionally overrides the 20-second LLM timeout
-
-Current expected values:
-
-- `VPS_HOST=161.97.187.158`
-- `VPS_USER=deploy`
-- `VPS_SSH_PORT=22`
-- `VPS_SERVICE_NAME=urbanflux-backend`
-
-### VPS service
-
-Expected `systemd` service file:
+Example `systemd` service file:
 
 ```text
 /etc/systemd/system/urbanflux-backend.service
 ```
 
-Expected service command:
+Example service command:
 
 ```bash
 /opt/urbanflux/backend/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
@@ -126,12 +101,4 @@ Check local VPS endpoints:
 curl -i http://127.0.0.1:8000/
 curl -i http://127.0.0.1:8000/hello
 curl -i http://127.0.0.1:8000/openapi.json
-```
-
-Check public API endpoints:
-
-```bash
-curl -i https://api.urbanflux.london/
-curl -i https://api.urbanflux.london/hello
-curl -i https://api.urbanflux.london/openapi.json
 ```

@@ -64,7 +64,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 Pushes to `main` run `.github/workflows/deploy.yml`.
 
 - Frontend deploys to Cloudflare Pages project `urbanflux`.
-- Backend deploys to the VPS at `:/opt/urbanflux/backend`.
+- Backend CI and VPS deployment are disabled because the hosted backend was turned off after the hackathon.
 
 Detailed notes:
 
