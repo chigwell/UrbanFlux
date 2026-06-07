@@ -9,6 +9,8 @@
 
 UrbanFlux is a Next.js CityTwin map frontend with a FastAPI backend.
 
+![UrbanFlux CityTwin demo](./frontend/public/demo-video.gif)
+
 ## Live URLs
 
 - Frontend: https://urbanflux.london/
