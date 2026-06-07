@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type {
   CityTwinImpact,
   CityTwinImpactMetric,
@@ -81,12 +82,26 @@ export function impactMessage(impact: CityTwinImpact | null): string | null {
 }
 
 function ImpactPreloader() {
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const statusText =
+    elapsedSeconds >= 10 ? "Refining impact" : "Estimating impact";
+
   return (
     <div
       className="uf-impact-loader border-[0.5px] bg-muted/20 p-3"
       role="status"
       aria-live="polite"
-      aria-label="Estimating impact"
+      aria-label={`${statusText}, ${elapsedSeconds} seconds elapsed`}
     >
       <div className="flex items-center gap-3">
         <div className="uf-impact-loader-mark" aria-hidden="true">
@@ -97,9 +112,12 @@ function ImpactPreloader() {
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-sm font-medium">Estimating impact</span>
-            <span className="uf-impact-loader-dots text-xs tabular-nums text-muted-foreground">
-              00
+            <span className="min-w-0 text-sm font-medium">
+              {statusText}
+              <span className="uf-impact-loader-dots" aria-hidden="true" />
+            </span>
+            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+              {elapsedSeconds}s
             </span>
           </div>
           <div className="mt-2 h-px overflow-hidden bg-border">

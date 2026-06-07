@@ -1299,6 +1299,43 @@ export function initCityTwinMap(options = {}) {
     emit.onImpact(null);
   }
 
+  function logImpactResponse(data, params) {
+    const engine = data.calculation_engine || "unknown";
+    const isLlmEngine = engine === "nemotron" || engine === "fallback_llm";
+    const llmProvider =
+      engine === "nemotron"
+        ? "Nvidia Nemotron"
+        : engine === "fallback_llm"
+          ? "Fallback LLM provider"
+          : null;
+
+    console.info("[UrbanFlux] Impact response", {
+      engine,
+      llmProvider,
+      usedLlm: isLlmEngine,
+      reason: data.calculation_reason || "unknown",
+      note: data.note || "",
+      approximatePopulation: data.approximate_population,
+      areaKm2: data.area_km2,
+      params,
+      response: data,
+    });
+
+    (data.metrics || []).forEach((metric, index) => {
+      console.info(`[UrbanFlux] Impact metric ${index + 1}`, {
+        engine,
+        llmProvider,
+        metric: metric.improved_metric,
+        value: metric.improved_value,
+        delta: metric.delta,
+        source: metric.source || null,
+        methodologySource: metric.methodology_source || null,
+        basis: metric.basis || null,
+        rawMetric: metric,
+      });
+    });
+  }
+
   async function fetchImpact() {
     if (state.vertices.length < MIN_POLYGON_VERTICES) {
       return;
@@ -1329,11 +1366,7 @@ export function initCityTwinMap(options = {}) {
         throw new Error(`Impact request failed: ${response.status}`);
       }
       const data = await response.json();
-      console.info("[UrbanFlux] Impact calculation engine", {
-        engine: data.calculation_engine || "unknown",
-        reason: data.calculation_reason || "unknown",
-        note: data.note || "",
-      });
+      logImpactResponse(data, params);
       state.impactKey = key;
       emit.onImpact({
         status: "ready",

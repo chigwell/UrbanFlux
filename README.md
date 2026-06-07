@@ -1,6 +1,11 @@
-<div align="center">
-  <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&height=200&section=header&text=UrbanFlux&fontSize=50&fontAlignY=35&animation=fadeIn&fontColor=FFFFFF&descAlignY=55&descAlign=62" alt="UrbanFlux" width="100%" />
-</div>
+<a href="https://urbanflux.london" target="_blank" rel="noopener noreferrer">
+    <div align="center">
+      <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&height=200&section=header&text=UrbanFlux&fontSize=50&fontAlignY=35&animation=fadeIn&fontColor=FFFFFF&descAlignY=55&descAlign=62" alt="UrbanFlux" width="100%" />
+    </div>
+</a>
+
+![GitHub CI](https://github.com/chigwell/UrbanFlux/actions/workflows/deploy.yml/badge.svg)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
 UrbanFlux is a Next.js CityTwin map frontend with a FastAPI backend.
 
@@ -60,3 +65,13 @@ Detailed notes:
 
 - `frontend/README.md`
 - `backend/README.md`
+
+## Contributors
+
+<a href="https://github.com/chigwell/UrbanFlux/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=chigwell/UrbanFlux" />
+</a>
+
+<p align="center">
+  <img src="assets/UrbanFlux-transparent.png" alt="UrbanFlux" width="400">
+</p>

@@ -47,6 +47,15 @@ The standard backend install works without live Nemotron credentials. To run liv
 
 `nemotron.py` is a standalone recommendation script. It is not imported by the FastAPI server.
 
+Optional second LLM fallback:
+
+- `FALLBACK_LLM_PROVIDER_URL` - OpenAI-compatible base URL or full chat completions URL. If a base URL is provided, `/chat/completions` is appended.
+- `FALLBACK_LLM_PROVIDER_TOKEN` - bearer token for the fallback provider.
+- `FALLBACK_LLM_PROVIDER_MODEL` - optional model name. Defaults to the configured Nemotron model name.
+- `IMPACT_LLM_TIMEOUT_S` - optional total LLM refinement timeout in seconds. Defaults to 20.
+
+The `/impact` path tries FAL/OpenRouter first, then this fallback provider, then deterministic London-data-first metrics.
+
 ## Backend Layout
 
 - `main.py` - FastAPI routes and public import surface.
@@ -77,6 +86,9 @@ The workflow installs Python dependencies on the VPS, ensures the mapped London 
 - `VPS_SSH_PORT`
 - `VPS_SERVICE_NAME`
 - `FAL_KEY` when live Nemotron refinement is enabled
+- `FALLBACK_LLM_PROVIDER_URL` and `FALLBACK_LLM_PROVIDER_TOKEN` when the second LLM fallback is enabled
+- `FALLBACK_LLM_PROVIDER_MODEL` optionally overrides the fallback model name
+- `IMPACT_LLM_TIMEOUT_S` optionally overrides the 20-second LLM timeout
 
 Current expected values:
 

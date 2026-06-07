@@ -114,6 +114,9 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_SSH_PORT || '22' }}
           FAL_KEY: ${{ secrets.FAL_KEY }}
+          FALLBACK_LLM_PROVIDER_URL: ${{ secrets.FALLBACK_LLM_PROVIDER_URL }}
+          FALLBACK_LLM_PROVIDER_TOKEN: ${{ secrets.FALLBACK_LLM_PROVIDER_TOKEN }}
+          FALLBACK_LLM_PROVIDER_MODEL: ${{ secrets.FALLBACK_LLM_PROVIDER_MODEL }}
         run: |
           umask 077
           if [ -z "${FAL_KEY}" ]; then
@@ -121,7 +124,18 @@ jobs:
             exit 1
           fi
 
-          printf 'FAL_KEY=%s\n' "${FAL_KEY}" > /tmp/urbanflux-backend.env
+          {
+            printf 'FAL_KEY=%s\n' "${FAL_KEY}"
+            if [ -n "${FALLBACK_LLM_PROVIDER_URL}" ]; then
+              printf 'FALLBACK_LLM_PROVIDER_URL=%s\n' "${FALLBACK_LLM_PROVIDER_URL}"
+            fi
+            if [ -n "${FALLBACK_LLM_PROVIDER_TOKEN}" ]; then
+              printf 'FALLBACK_LLM_PROVIDER_TOKEN=%s\n' "${FALLBACK_LLM_PROVIDER_TOKEN}"
+            fi
+            if [ -n "${FALLBACK_LLM_PROVIDER_MODEL}" ]; then
+              printf 'FALLBACK_LLM_PROVIDER_MODEL=%s\n' "${FALLBACK_LLM_PROVIDER_MODEL}"
+            fi
+          } > /tmp/urbanflux-backend.env
 
           scp -i ~/.ssh/urbanflux_deploy_key -P "${VPS_PORT}" \
             -o StrictHostKeyChecking=no -o BatchMode=yes -o IdentitiesOnly=yes \
