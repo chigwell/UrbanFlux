@@ -65,3 +65,11 @@ Detailed notes:
 
 - `frontend/README.md`
 - `backend/README.md`
+
+## Contributors
+
+<a href="https://github.com/chigwell/UrbanFlux/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=chigwell/UrbanFlux" />
+</a>
+
+![UrbanFlux-transparent.png](assets/UrbanFlux-transparent.png)
