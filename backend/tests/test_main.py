@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -364,20 +365,24 @@ def test_call_nemotron_reads_fal_key_from_env_file(monkeypatch, tmp_path) -> Non
         sys.modules,
         "fal_client",
         types.SimpleNamespace(
-            subscribe=lambda *args, **kwargs: {
-                "output": json.dumps(
-                    [
-                        {
-                            "improved_metric": "Housing capacity",
-                            "improved_value": "+1%",
-                            "delta": "+1% vs baseline",
-                            "source": source,
-                            "methodology_source": "",
-                            "basis": "Mapped data",
-                        }
-                    ]
-                )
-            }
+            subscribe=lambda *args, **kwargs: (
+                {
+                    "output": json.dumps(
+                        [
+                            {
+                                "improved_metric": "Housing capacity",
+                                "improved_value": "+1%",
+                                "delta": "+1% vs baseline",
+                                "source": source,
+                                "methodology_source": "",
+                                "basis": "Mapped data",
+                            }
+                        ]
+                    )
+                }
+                if os.environ.get("FAL_KEY") == "file-key"
+                else (_ for _ in ()).throw(AssertionError("FAL_KEY was not loaded into os.environ"))
+            )
         ),
     )
 

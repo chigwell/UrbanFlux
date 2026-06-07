@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Callable
@@ -45,12 +48,15 @@ Example output format:
 
 _NEMOTRON_TIMEOUT_S = 12
 _ENV_FILE = Path(__file__).resolve().with_name(".env")
+_NEMOTRON_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
+_FAL_APP = "openrouter/router"
+_LOGGER = logging.getLogger("urbanflux.nemotron")
 
 
-def _get_fal_key() -> str:
+def _get_fal_key_with_source() -> tuple[str, str]:
     fal_key = os.getenv("FAL_KEY", "").strip()
     if fal_key:
-        return fal_key
+        return fal_key, "environment"
 
     try:
         for line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
@@ -59,11 +65,39 @@ def _get_fal_key() -> str:
                 continue
             key, value = stripped.split("=", 1)
             if key.strip() == "FAL_KEY":
-                return value.strip().strip("'\"")
+                return value.strip().strip("'\""), f"env_file:{_ENV_FILE}"
     except OSError:
-        return ""
+        return "", "missing"
 
-    return ""
+    return "", "missing"
+
+
+def _get_fal_key() -> str:
+    fal_key, _source = _get_fal_key_with_source()
+    return fal_key
+
+
+def _json_preview(value: object, limit: int = 20000) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    except TypeError:
+        text = str(value)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}... [truncated {len(text) - limit} chars]"
+
+
+def _log_nemotron_attempt(
+    attempt_id: str,
+    event: str,
+    **details: object,
+) -> None:
+    _LOGGER.info(
+        "Nemotron impact attempt %s %s %s",
+        attempt_id,
+        event,
+        _json_preview(details),
+    )
 
 
 def _validate_metric_sources(metrics: list[ImpactMetric], allowed_sources: set[str]) -> list[ImpactMetric]:
@@ -102,27 +136,74 @@ def _call_nemotron(prompt: str) -> tuple[list[ImpactMetric] | None, str]:
     Call Nemotron via fal.ai and parse the structured JSON response.
     Returns metrics plus a stable reason code for browser diagnostics.
     """
-    fal_key = _get_fal_key()
+    attempt_id = uuid.uuid4().hex[:8]
+    started_at = time.monotonic()
+    fal_key, fal_key_source = _get_fal_key_with_source()
+    _log_nemotron_attempt(
+        attempt_id,
+        "start",
+        fal_key_present=bool(fal_key),
+        fal_key_source=fal_key_source,
+        env_file=str(_ENV_FILE),
+        env_file_exists=_ENV_FILE.exists(),
+        app=_FAL_APP,
+        model=_NEMOTRON_MODEL,
+        system_prompt_chars=len(NEMOTRON_IMPACT_SYSTEM_PROMPT),
+        prompt_chars=len(prompt),
+    )
     if not fal_key:
+        _log_nemotron_attempt(attempt_id, "fallback", reason="fal_key_missing")
         return None, "fal_key_missing"
+
+    if not os.getenv("FAL_KEY"):
+        os.environ["FAL_KEY"] = fal_key
+        _log_nemotron_attempt(
+            attempt_id,
+            "loaded_fal_key_into_process_environment",
+            source=fal_key_source,
+        )
 
     try:
         import fal_client
     except ImportError:
+        _log_nemotron_attempt(attempt_id, "fallback", reason="fal_client_unavailable")
         return None, "fal_client_unavailable"
 
+    _log_nemotron_attempt(
+        attempt_id,
+        "request",
+        app=_FAL_APP,
+        model=_NEMOTRON_MODEL,
+        with_logs=False,
+        system_prompt=NEMOTRON_IMPACT_SYSTEM_PROMPT,
+        prompt=prompt,
+    )
     try:
         result = fal_client.subscribe(
-            "openrouter/router",
+            _FAL_APP,
             arguments={
-                "model": "nvidia/nemotron-3-ultra-550b-a55b",
+                "model": _NEMOTRON_MODEL,
                 "system_prompt": NEMOTRON_IMPACT_SYSTEM_PROMPT,
                 "prompt": prompt,
             },
             with_logs=False,
         )
     except Exception as exc:
+        _LOGGER.exception(
+            "Nemotron impact attempt %s call failed after %.3fs",
+            attempt_id,
+            time.monotonic() - started_at,
+        )
         return None, f"nemotron_call_failed:{type(exc).__name__}"
+
+    _log_nemotron_attempt(
+        attempt_id,
+        "response",
+        elapsed_s=round(time.monotonic() - started_at, 3),
+        result_type=type(result).__name__,
+        result_keys=sorted(result.keys()) if isinstance(result, dict) else [],
+        result_preview=result,
+    )
 
     raw = (
         result.get("output")
@@ -134,6 +215,14 @@ def _call_nemotron(prompt: str) -> tuple[list[ImpactMetric] | None, str]:
     try:
         parsed = json.loads(raw)
         if not isinstance(parsed, list):
+            _log_nemotron_attempt(
+                attempt_id,
+                "fallback",
+                reason="invalid_metric_json",
+                raw_chars=len(raw),
+                raw_preview=raw,
+                parsed_type=type(parsed).__name__,
+            )
             return None, "invalid_metric_json"
         metrics = []
         for item in parsed:
@@ -150,9 +239,34 @@ def _call_nemotron(prompt: str) -> tuple[list[ImpactMetric] | None, str]:
                 )
             )
         if not metrics:
+            _log_nemotron_attempt(
+                attempt_id,
+                "fallback",
+                reason="invalid_metric_json",
+                raw_chars=len(raw),
+                raw_preview=raw,
+                parsed_items=len(parsed),
+                valid_metrics=0,
+            )
             return None, "invalid_metric_json"
+        _log_nemotron_attempt(
+            attempt_id,
+            "success",
+            elapsed_s=round(time.monotonic() - started_at, 3),
+            raw_chars=len(raw),
+            raw_preview=raw,
+            parsed_items=len(parsed),
+            valid_metrics=len(metrics),
+            metric_names=[metric.improved_metric for metric in metrics],
+        )
         return metrics, "nemotron_refinement_succeeded"
-    except Exception:
+    except Exception as exc:
+        _LOGGER.exception(
+            "Nemotron impact attempt %s response parse failed after %.3fs; raw preview: %s",
+            attempt_id,
+            time.monotonic() - started_at,
+            raw[:4000],
+        )
         return None, "invalid_metric_json"
 
 
@@ -177,6 +291,16 @@ def _nemotron_impact_metrics(
         if _normalise_source_url(metric.source)
     }
     allowed_sources.update(borough_sources)
+    _LOGGER.info(
+        "Preparing Nemotron impact refinement for borough=%s population=%s area_km2=%s "
+        "london_metrics=%s borough_sources=%s allowed_sources=%s",
+        borough_name or "unknown",
+        population,
+        area_km2,
+        len(london_metrics),
+        len(borough_sources),
+        len(allowed_sources),
+    )
 
     prompt = f"""Area statistics:
 - Population: {population:,}
@@ -211,10 +335,16 @@ Return the refined JSON array of impact metrics."""
     except FuturesTimeoutError:
         nemotron_metrics = None
         calculation_reason = "nemotron_timeout"
+        _LOGGER.warning(
+            "Nemotron impact refinement timed out after %ss for borough=%s",
+            _NEMOTRON_TIMEOUT_S,
+            borough_name or "unknown",
+        )
         executor.shutdown(wait=False, cancel_futures=True)
     except Exception as exc:
         nemotron_metrics = None
         calculation_reason = f"nemotron_call_failed:{type(exc).__name__}"
+        _LOGGER.exception("Nemotron impact refinement worker failed")
         executor.shutdown(wait=True)
     else:
         executor.shutdown(wait=True)
@@ -226,6 +356,11 @@ Return the refined JSON array of impact metrics."""
             if borough_name
             else "Refined by Nvidia Nemotron using London Datastore data"
         )
+        _LOGGER.info(
+            "Nemotron impact refinement selected engine=nemotron reason=%s metrics=%s",
+            calculation_reason,
+            len(nemotron_metrics),
+        )
         return nemotron_metrics, note, "nemotron", calculation_reason
 
     has_london_sources = any(_normalise_source_url(metric.source) for metric in london_metrics)
@@ -235,4 +370,9 @@ Return the refined JSON array of impact metrics."""
         note = f"Benchmark-method estimates for {borough_name}; mapped rows unavailable"
     else:
         note = "Benchmark-method estimates; mapped borough data unavailable"
+    _LOGGER.info(
+        "Nemotron impact refinement selected engine=deterministic_fallback reason=%s note=%s",
+        calculation_reason,
+        note,
+    )
     return _validate_metric_sources(london_metrics, allowed_sources), note, "deterministic_fallback", calculation_reason
