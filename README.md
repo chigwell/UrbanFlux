@@ -72,4 +72,6 @@ Detailed notes:
   <img src="https://contrib.rocks/image?repo=chigwell/UrbanFlux" />
 </a>
 
-![UrbanFlux-transparent.png](assets/UrbanFlux-transparent.png)
+<p align="center">
+  <img src="assets/UrbanFlux-transparent.png" alt="UrbanFlux" width="400">
+</p>
